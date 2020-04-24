@@ -1,3 +1,3 @@
-# TD Actor Critic Implementation in CartPole environment
+# Actor-Critic Implementations in CartPole environment
 
 ![Exemplo](cartpole.gif)

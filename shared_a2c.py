@@ -12,7 +12,7 @@ def pg_loss(y_actual, y_pred):
     logp = tf.math.log(tf.gather_nd(y_pred, selector) + 10e-10)
     return -tf.math.reduce_sum(logp * adv)
 
-class A2C:
+class SharedA2C:
     def __init__(self, env, epsilon=.99995, gamma=0.99):
         self.env  = env
         self.state_shape = self.env.observation_space.shape
@@ -31,20 +31,20 @@ class A2C:
         probs = Dense(self.action_size, activation='softmax')(dense2)
         values = Dense(1, activation='linear')(dense2)
 
-        actor = Model(input= [input_layer], output=[probs])
-        actor.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss=pg_loss)
+        actor = Model(inputs= input_layer, outputs=probs)
+        actor.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss=pg_loss)
 
-        critic = Model(input= [input_layer], output=[values])
-        critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.001), loss="mse")
+        critic = Model(inputs= input_layer, outputs=values)
+        critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss="mse")
 
         return actor, critic
 
     def v(self, state):
-        return self.model.predict(state.reshape(1, *state.shape))[0]
+        return self.critic.predict(state.reshape(1, *state.shape))[0]
 
-    def act(self, state):
+    def get_action(self, state):
         state = state.reshape(1, *state.shape)
-        policy = self.model.predict(state).flatten()
+        policy = self.actor.predict(state).flatten()
         action = np.random.choice(self.action_size, 1, p=policy)[0]
         return action
 
@@ -62,11 +62,11 @@ class A2C:
         y = []
         adv = []
         for i, (s, a, r, s2, done) in enumerate(minibatch):
-            v = self.critic.v(s)
+            v = self.v(s)
             if done:
                 target = -10
             else:
-                v2 = self.critic.v(s2)[0]
+                v2 = self.v(s2)[0]
                 target = r + self.gamma * v2
                 
             actions.append(a)
@@ -85,4 +85,4 @@ class A2C:
         self.epsilon = max(self.epsilon, self.epsilon_min)
         if np.random.random() < self.epsilon:
             return self.env.action_space.sample()
-        return self.actor.act(state)
+        return self.get_action(state)
