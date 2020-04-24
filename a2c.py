@@ -7,10 +7,10 @@ from tensorflow.keras.layers import Dense
 
 def pg_loss(y_actual, y_pred):
     actions = tf.cast(y_actual[:, 0], tf.int32)
-    td = y_actual[:, 1]
+    adv = y_actual[:, 1]
     selector = tf.stack([tf.range(tf.size(actions)), actions], axis=1)
     logp = tf.math.log(tf.gather_nd(y_pred, selector) + 10e-10)
-    return -tf.math.reduce_sum(logp * td)
+    return -tf.math.reduce_sum(logp * adv)
 
 class Actor:
     def __init__(self, env, lr=0.001):
@@ -22,8 +22,8 @@ class Actor:
         
     def create_model(self):
         model = Sequential([
-            Dense(32, input_shape=self.state_shape, activation='relu'),
-            Dense(32, activation='relu'),
+            Dense(24, input_shape=self.state_shape, activation='relu'),
+            Dense(24, activation='relu'),
             Dense(self.action_size, activation='softmax'),
         ])
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.lr), loss=pg_loss)
@@ -36,7 +36,7 @@ class Actor:
         return action
 
 class Critic:
-    def __init__(self, env, lr=0.001):
+    def __init__(self, env, lr=0.005):
         self.env = env
         self.lr = lr
         self.state_shape = self.env.observation_space.shape
@@ -45,8 +45,10 @@ class Critic:
         
     def create_model(self):
         model = Sequential([
-            Dense(32, input_shape=self.state_shape, activation='relu'),
-            Dense(32, activation='relu'),
+            Dense(24, input_shape=self.state_shape, activation='relu'),
+            Dense(24, activation='relu'),
+            Dense(24, activation='relu'),
+            Dense(24, activation='relu'),
             Dense(1, activation='linear'),
         ])
         model.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.lr), loss="mse")
@@ -55,24 +57,21 @@ class Critic:
     def v(self, state):
         return self.model.predict(state.reshape(1, *state.shape))[0]
 
-class ActorCritic:
-    def __init__(self, env, lr=0.001, epsilon=.99995, gamma=0.99):
+class A2C:
+    def __init__(self, env, epsilon=.99995, gamma=0.99):
         self.env  = env
-        self.lr = lr
         self.epsilon = epsilon
-        self.epsilon_min = 0.01
+        self.epsilon_min = 0.001
         self.gamma = gamma
-        self.memory = deque(maxlen=2000)
+        self.memory = deque(maxlen=20000)
 
-        self.actor = Actor(self.env, self.lr)
-        self.critic = Critic(self.env, self.lr)
+        self.actor = Actor(self.env)
+        self.critic = Critic(self.env)
 
     def remember(self, state, action, reward, new_state, done):
         self.memory.append((state, action, reward, new_state, done))
 
-    def train(self):
-        batch_size = 16
-        
+    def train(self, batch_size=32):        
         if batch_size >= len(self.memory):
             minibatch = self.memory
         else:
@@ -81,25 +80,25 @@ class ActorCritic:
         states = np.array([mem[0] for mem in minibatch])
         actions = []
         y = []
-        td_error = []
+        adv = []
         for i, (s, a, r, s2, done) in enumerate(minibatch):
             v = self.critic.v(s)
             if done:
-                target = -r
+                target = -10
             else:
                 v2 = self.critic.v(s2)[0]
                 target = r + self.gamma * v2
                 
             actions.append(a)
             y.append(target)
-            td_error.append(target - v)
+            adv.append(target - v)
         
-        self.critic.model.train_on_batch(states, y)
+        self.critic.model.fit(states, y, batch_size=batch_size, verbose=0)
         
         y_actual = np.empty(shape=(len(states), 2))
         y_actual[:, 0] = actions
-        y_actual[:, 1] = td_error
-        loss = self.actor.model.train_on_batch(states, y_actual)
+        y_actual[:, 1] = adv
+        loss = self.actor.model.fit(states, y_actual, batch_size=batch_size, verbose=0)
 
     def act(self, state):
         self.epsilon *= self.epsilon
