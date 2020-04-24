@@ -26,16 +26,16 @@ class SharedA2C:
 
     def create_model(self):
         input_layer = Input(shape=self.state_shape)
-        dense1 = Dense(128, activation='relu')(input_layer)
-        dense2 = Dense(128, activation='relu')(dense1)
+        dense1 = Dense(64, activation='relu')(input_layer)
+        dense2 = Dense(64, activation='relu')(dense1)
         probs = Dense(self.action_size, activation='softmax')(dense2)
         values = Dense(1, activation='linear')(dense2)
 
         actor = Model(inputs= input_layer, outputs=probs)
-        actor.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss=pg_loss)
+        actor.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss=pg_loss)
 
         critic = Model(inputs= input_layer, outputs=values)
-        critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0001), loss="mse")
+        critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005), loss="mse")
 
         return actor, critic
 
@@ -51,9 +51,9 @@ class SharedA2C:
     def remember(self, state, action, reward, new_state, done):
         self.memory.append((state, action, reward, new_state, done))
 
-    def train(self, batch_size=32):        
+    def train(self, batch_size=32):
         if batch_size >= len(self.memory):
-            minibatch = self.memory
+            return
         else:
             minibatch = random.sample(self.memory, k=batch_size)
 
