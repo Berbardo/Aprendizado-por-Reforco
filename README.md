@@ -4,14 +4,22 @@
 
 ![Exemplo](/img/cartpole.gif)
 
-## Shared A2C
+## Shared AAC
 
-Actor Critic com uma rede neural compartilhada entre o Actor e o Critic.
+Advantage Actor Critic com uma rede neural compartilhada entre o Actor e o Critic.
 
 Curva de Aprendizado:
 
 ![Shared A2C](img/SharedA2C.png)
 
-Shared A2C após 100 episódios:
+Shared AAC após 100 episódios:
 
 ![Shared A2C](img/SharedA2C.gif)
+
+## PPO
+
+Proximal Policy Optimization com GAE
+
+Curva de Aprendizado:
+
+![PPO](img/PPO.png)

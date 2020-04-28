@@ -57,7 +57,7 @@ class Critic:
     def v(self, state):
         return self.model.predict(state.reshape(1, *state.shape))[0]
 
-class A2C:
+class AAC:
     def __init__(self, env, epsilon=.99995, gamma=0.99):
         self.env  = env
         self.epsilon = epsilon

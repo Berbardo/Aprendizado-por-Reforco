@@ -5,14 +5,16 @@ import tensorflow as tf
 from tensorflow.keras.models import Model
 from tensorflow.keras.layers import Dense, Input
 
+entropy = 0.005
+
 def pg_loss(y_actual, y_pred):
     actions = tf.cast(y_actual[:, 0], tf.int32)
     adv = y_actual[:, 1]
     selector = tf.stack([tf.range(tf.size(actions)), actions], axis=1)
     logp = tf.math.log(tf.gather_nd(y_pred, selector) + 10e-10)
-    return -tf.math.reduce_sum(logp * adv)
+    return -tf.math.reduce_sum(logp * adv) + entropy * -(tf.gather_nd(y_pred, selector) * logp)
 
-class SharedA2C:
+class SharedAAC:
     def __init__(self, env, epsilon=.99995, gamma=0.99):
         self.env  = env
         self.state_shape = self.env.observation_space.shape
@@ -20,7 +22,7 @@ class SharedA2C:
         self.epsilon = epsilon
         self.epsilon_min = 0.001
         self.gamma = gamma
-        self.memory = deque(maxlen=20000)
+        self.memory = deque(maxlen=100000)
 
         self.actor, self.critic = self.create_model()
 
@@ -52,11 +54,13 @@ class SharedA2C:
         self.memory.append((state, action, reward, new_state, done))
 
     def train(self, batch_size=32):
-        if batch_size >= len(self.memory):
+        if batch_size > len(self.memory):
             return
         else:
             minibatch = random.sample(self.memory, k=batch_size)
-
+        if batch_size == 0:
+            return
+        
         states = np.array([mem[0] for mem in minibatch])
         actions = []
         y = []
@@ -73,12 +77,12 @@ class SharedA2C:
             y.append(target)
             adv.append(target - v)
         
-        self.critic.fit(states, y, batch_size=batch_size, verbose=0)
+        self.critic.fit(states, y, batch_size=batch_size, epochs=2, verbose=0)
         
         y_actual = np.empty(shape=(len(states), 2))
         y_actual[:, 0] = actions
         y_actual[:, 1] = adv
-        loss = self.actor.fit(states, y_actual, batch_size=batch_size, verbose=0)
+        loss = self.actor.train_on_batch(states, y_actual)
 
     def act(self, state):
         self.epsilon *= self.epsilon
