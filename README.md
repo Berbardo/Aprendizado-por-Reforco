@@ -4,7 +4,7 @@
 
 ![Exemplo](/img/cartpole.gif)
 
-## Shared AAC
+## Shared Network AAC
 
 Advantage Actor Critic com uma rede neural compartilhada entre o Actor e o Critic.
 
@@ -19,6 +19,12 @@ Shared AAC após 100 episódios:
 ## PPO
 
 Proximal Policy Optimization com GAE
+
+![PPO](img/PPO.gif)
+
+## Shared Networkd PPO
+
+Shared Network Proximal Policy Optimization com GAE
 
 Curva de Aprendizado:
 
