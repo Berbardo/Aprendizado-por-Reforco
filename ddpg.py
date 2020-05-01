@@ -1,162 +1,137 @@
 import random
 import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
 from collections import deque
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Input, Concatenate
 from ou_noise import OUNoise
-from ou_noise import OrnsteinUhlenbeckActionNoise
 
-def custom_loss(y_pred, y_actual):
-    policy_loss = -tf.reduce_mean(y_actual)
-    return policy_loss
-
-class Actor:
-    def __init__(self, env, lr=0.0001):
-        self.env = env
-        self.lr = lr
-        self.state_shape = self.env.observation_space.shape
-        self.action_shape = self.env.action_space.shape
-        self.model = self.create_model()
+class Actor(nn.Module):
+    def __init__(self, env):
+        super(Actor, self).__init__()
+        self.linear1 = nn.Linear(env.observation_space.shape[0], 512)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.linear2 = nn.Linear(512, 256)
+        self.bn2 = nn.BatchNorm1d(256)
+        self.linear3 = nn.Linear(256, env.action_space.shape[0])
         
-    def create_model(self):
-        input_layer = Input(shape=self.state_shape)
-        dense1 = Dense(512, activation='relu')(input_layer)
-        dense2 = Dense(128, activation='relu')(dense1)
-        action = Dense(self.action_shape[0], activation='tanh')(dense2)
-        actor = Model(inputs= input_layer, outputs= action)
-        actor.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.lr), loss=custom_loss)
-        return actor
-    
-    def act(self, state):
-        state = state.reshape(1, *state.shape)
-        action = self.model.predict(state).flatten()
-        return action
+    def forward(self, state):
+        x = F.relu(self.bn1(self.linear1(state)))
+        x = F.relu(self.bn2(self.linear2(x)))
+        x = torch.tanh(self.linear3(x))
 
-class Critic:
-    def __init__(self, env, lr=0.001):
-        self.env = env
-        self.lr = lr
-        self.state_shape = self.env.observation_space.shape
-        self.action_shape = self.env.action_space.shape
-        self.model = self.create_model()
-        
-    def create_model(self):
-        state_input = Input(shape=self.state_shape)
-        action_input = Input(shape=self.action_shape)
-        
-        state1 = Dense(500, activation='relu')(state_input)
-        merged = Concatenate()([state1, action_input])
-        dense2 = Dense(300, activation='relu')(merged)
+        return x
 
-        q = Dense(1, activation='linear')(dense2)
+class Critic(nn.Module):
+    def __init__(self, env):
+        super(Critic, self).__init__()
 
-        critic = Model(inputs=[state_input,action_input], outputs= q)
-        critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.lr), loss="mse")
-        return critic
-        
-    def q(self, state, action):
-        return self.model.predict([state.reshape(1, *state.shape), action.reshape(1, *action.shape)])[0]
+        self.linear1 = nn.Linear(env.observation_space.shape[0], 512)
+        self.bn1 = nn.BatchNorm1d(512)
+        self.linear2 = nn.Linear(512 + env.action_space.shape[0], 512)
+        self.linear3 = nn.Linear(512, 300)
+        self.linear4 = nn.Linear(300, 1)
+
+    def forward(self, state, a):
+        x = F.relu(self.bn1(self.linear1(state)))
+        xa_cat = torch.cat([x,a], 1)
+        xa = F.relu(self.linear2(xa_cat))
+        xa = F.relu(self.linear3(xa))
+        q = self.linear4(xa)
+
+        return q
 
 class DDPG:
-    def __init__(self, env, alpha=0.0005, beta=0.0005, gamma=0.99, tau=0.001):
+    def __init__(self, env, alpha=0.0001, beta=0.001, gamma=0.99, tau=0.001):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
         self.env  = env
-        self.state_shape = self.env.observation_space.shape
-        self.action_shape = self.env.action_space.shape
+        self.state_shape = self.env.observation_space.shape[0]
+        self.action_shape = self.env.action_space.shape[0]
         self.action_high = self.env.action_space.high
         self.action_low = self.env.action_space.low
 
         self.gamma = gamma
         self.tau = tau
-        self.memory = deque(maxlen=100000)
-        self.noise = OrnsteinUhlenbeckActionNoise(self.env.action_space)
+        self.memory = deque(maxlen=1000000)
+        self.noise = OUNoise(self.action_shape, 0)
 
-        self.actor = Actor(self.env, alpha)
-        self.target_actor = Actor(self.env, alpha)
-        self.critic = Critic(self.env, beta)
-        self.target_critic = Critic(self.env, beta)
+        self.actor = Actor(self.env).to(self.device)
+        self.target_actor = Actor(self.env).to(self.device)
 
-        critic_weights = self.critic.model.get_weights()
-        self.target_critic.model.set_weights(critic_weights)
-        actor_weights = self.actor.model.get_weights()
-        self.target_actor.model.set_weights(actor_weights)
+        self.critic = Critic(self.env).to(self.device)
+        self.target_critic = Critic(self.env).to(self.device)
 
-    def act(self, state, step):
-        action = 2*self.actor.act(state)
-        action += self.noise.get_noise()
+        for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
+            target_param.data.copy_(param.data)
+
+        for target_param, param in zip(self.target_actor.parameters(), self.actor.parameters()):
+            target_param.data.copy_(param.data)
+
+        self.actor_optimizer  = optim.Adam(self.actor.parameters(), lr=alpha)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=beta)
+
+    def act(self, state):
+        state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
+        self.actor.eval()
+        with torch.no_grad():
+            action = self.actor.forward(state)
+        self.actor.train()
+        action = action.squeeze(0).cpu().detach().numpy()
+        action += self.noise.sample()
 
         return np.clip(action, self.action_low, self.action_high)
 
     def remember(self, state, action, reward, new_state, done):
-        self.memory.append((state, action, reward, new_state, done))
+        self.memory.append((np.array(state), action, reward, new_state, done))
 
-    def _train_critic(self, batch):
-        states = []
-        actions = []
-        target = []
-        for (s, a, r, s2, done) in batch:
-            if done:
-                t = r
-
-            else:
-                a2 = self.target_actor.act(s2)
-                q2 = self.target_critic.q(s2, a2)
-                t = r + self.gamma * q2
-
-            states.append(s)
-            actions.append(a)
-            target.append(t)
-
-        states = np.array(states)
-        actions = np.array(actions)
-        target = np.array(target)
-
-        self.critic.model.fit([states, actions], target, steps_per_epoch=1, verbose=0)
-
-    def _train_actor(self, batch):
-        states = []
-        actions = []
-        target = []
-
-        for (s, a, r, s2, done) in batch:
-            action = self.actor.act(s)
-
-            states.append(s)
-            actions.append(action)
-
-        states = np.array(states)
-        actions = np.array(actions)
-        q = self.critic.model.predict([states, actions]).flatten()
-        q = np.array(q)
-
-        self.actor.model.fit(states, q, steps_per_epoch=1, verbose=0)
-
-    def train(self, batch_size=128, epochs=50):
+    def train(self, batch_size=128, epochs=1):
         if batch_size > len(self.memory):
             return
         
         for epoch in range(epochs):
             minibatch = random.sample(self.memory, batch_size)
-            self._train_critic(minibatch)
-            self._train_actor(minibatch)
+            states, actions, rewards, next_states, dones = [], [], [], [], []
+            for (s, a, r, s2, d) in minibatch:
+                states.append(s)
+                actions.append(a)
+                rewards.append([r])
+                next_states.append(s2)
+                dones.append(d)
+
+            states = torch.FloatTensor(states).to(self.device)
+            actions = torch.FloatTensor(actions).to(self.device)
+            rewards = torch.FloatTensor(rewards).to(self.device)
+            next_states = torch.FloatTensor(next_states).to(self.device)
+            dones = torch.FloatTensor(dones).to(self.device)
+
+            self._train_critic(states, actions, rewards, next_states, dones)
+            self._train_actor(states, actions, rewards, next_states, dones)
             self.update_target()
 
-    def _update_target_actor(self):
-        actor_weights  = self.actor.model.get_weights()
-        target_actor_weights = self.target_actor.model.get_weights()
+    def _train_critic(self, states, actions, rewards, next_states, dones):
+        q = self.critic.forward(states, actions)
+        a2 = self.target_actor.forward(next_states)
+        q2 = self.target_critic.forward(next_states, a2.detach())
+        
+        target = rewards + self.gamma * q2
+        q_loss = F.mse_loss(q, target.detach())
 
-        for i in range(len(target_actor_weights)):
-            target_actor_weights[i] = actor_weights[i]*self.tau + target_actor_weights[i]*(1-self.tau)
-        self.target_actor.model.set_weights(target_actor_weights)
+        self.critic_optimizer.zero_grad()
+        q_loss.backward() 
+        self.critic_optimizer.step()
 
-    def _update_target_critic(self):
-        critic_weights  = self.critic.model.get_weights()
-        target_critic_weights = self.target_critic.model.get_weights()
-
-        for i in range(len(target_critic_weights)):
-            target_critic_weights[i] = critic_weights[i]*self.tau + target_critic_weights[i]*(1-self.tau)
-        self.target_critic.model.set_weights(target_critic_weights)
+    def _train_actor(self, states, actions, rewards, next_states, dones):
+        policy_loss = -self.critic.forward(states, self.actor.forward(states)).mean()
+        
+        self.actor_optimizer.zero_grad()
+        policy_loss.backward()
+        self.actor_optimizer.step()
 
     def update_target(self):
-        self._update_target_actor()
-        self._update_target_critic()
+        for target_param, param in zip(self.target_actor.parameters(), self.actor.parameters()):
+            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+       
+        for target_param, param in zip(self.target_critic.parameters(), self.critic.parameters()):
+            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
