@@ -11,14 +11,12 @@ class Actor(nn.Module):
     def __init__(self, env):
         super(Actor, self).__init__()
         self.linear1 = nn.Linear(env.observation_space.shape[0], 512)
-        self.bn1 = nn.BatchNorm1d(512)
         self.linear2 = nn.Linear(512, 256)
-        self.bn2 = nn.BatchNorm1d(256)
         self.linear3 = nn.Linear(256, env.action_space.shape[0])
         
     def forward(self, state):
-        x = F.relu(self.bn1(self.linear1(state)))
-        x = F.relu(self.bn2(self.linear2(x)))
+        x = F.relu(self.linear1(state))
+        x = F.relu(self.linear2(x))
         x = torch.tanh(self.linear3(x))
 
         return x
@@ -28,13 +26,12 @@ class Critic(nn.Module):
         super(Critic, self).__init__()
 
         self.linear1 = nn.Linear(env.observation_space.shape[0], 512)
-        self.bn1 = nn.BatchNorm1d(512)
         self.linear2 = nn.Linear(512 + env.action_space.shape[0], 512)
         self.linear3 = nn.Linear(512, 300)
         self.linear4 = nn.Linear(300, 1)
 
     def forward(self, state, a):
-        x = F.relu(self.bn1(self.linear1(state)))
+        x = F.relu(self.linear1(state))
         xa_cat = torch.cat([x,a], 1)
         xa = F.relu(self.linear2(xa_cat))
         xa = F.relu(self.linear3(xa))
@@ -43,7 +40,7 @@ class Critic(nn.Module):
         return q
 
 class DDPG:
-    def __init__(self, env, alpha=0.0001, beta=0.001, gamma=0.99, tau=0.001):
+    def __init__(self, env, alpha=0.001, beta=0.001, gamma=0.99, tau=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.env  = env
@@ -54,7 +51,7 @@ class DDPG:
 
         self.gamma = gamma
         self.tau = tau
-        self.memory = deque(maxlen=1000000)
+        self.memory = deque(maxlen=100000)
         self.noise = OUNoise(self.action_shape, 0)
 
         self.actor = Actor(self.env).to(self.device)
@@ -74,10 +71,7 @@ class DDPG:
 
     def act(self, state):
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-        self.actor.eval()
-        with torch.no_grad():
-            action = self.actor.forward(state)
-        self.actor.train()
+        action = self.actor.forward(state)
         action = action.squeeze(0).cpu().detach().numpy()
         action += self.noise.sample()
 

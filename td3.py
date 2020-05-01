@@ -5,20 +5,17 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from collections import deque
-from ou_noise import OUNoise
 
 class Actor(nn.Module):
     def __init__(self, env):
         super(Actor, self).__init__()
         self.linear1 = nn.Linear(env.observation_space.shape[0], 400)
-        self.bn1 = nn.BatchNorm1d(400)
         self.linear2 = nn.Linear(400, 300)
-        self.bn2 = nn.BatchNorm1d(300)
         self.linear3 = nn.Linear(300, env.action_space.shape[0])
         
     def forward(self, state):
-        a = F.relu(self.bn1(self.linear1(state)))
-        a = F.relu(self.bn2(self.linear2(a)))
+        a = F.relu(self.linear1(state))
+        a = F.relu(self.linear2(a))
         a = torch.tanh(self.linear3(a))
 
         return a
@@ -27,22 +24,22 @@ class Critic(nn.Module):
     def __init__(self, env):
         super(Critic, self).__init__()
 
-        self.linear1 = nn.Linear(env.observation_space.shape[0] + env.action_space.shape[0], 400)
-        self.bn1 = nn.BatchNorm1d(400)
-        self.linear2 = nn.Linear(400, 300)
-        self.bn2 = nn.BatchNorm1d(300)
-        self.linear3 = nn.Linear(300, 1)
+        self.linear1 = nn.Linear(env.observation_space.shape[0], 512)
+        self.linear2 = nn.Linear(512 + env.action_space.shape[0], 400)
+        self.linear3 = nn.Linear(400, 300)
+        self.linear4 = nn.Linear(300, 1)
 
     def forward(self, state, a):
-        sa = torch.cat([state,a], 1)
-        q = F.relu(self.bn1(self.linear1(sa)))
-        q = F.relu(self.bn2(self.linear2(q)))
-        q = self.linear3(q)
+        s = F.relu(self.linear1(state))
+        sa = torch.cat([s,a], 1)
+        q = F.relu(self.linear2(sa))
+        q = F.relu(self.linear3(q))
+        q = self.linear4(q)
 
         return q
 
 class TD3:
-    def __init__(self, env, alpha=0.0005, beta=0.0005, gamma=0.99, tau=0.005, policy_noise=0.1, noise_clip=0.3, policy_freq=2):
+    def __init__(self, env, alpha=0.0007, beta=0.0007, gamma=0.99, tau=0.005, policy_noise=0.2, noise_clip=0.5, policy_freq=2):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.env  = env
@@ -58,8 +55,6 @@ class TD3:
         self.noise_clip = noise_clip
         self.policy_freq = policy_freq
         self.count = 0
-
-        self.noise = OUNoise(self.action_shape, 0)
 
         self.actor = Actor(self.env).to(self.device)
         self.target_actor = Actor(self.env).to(self.device)
@@ -82,14 +77,11 @@ class TD3:
         self.critic_optimizer1 = optim.Adam(self.critic1.parameters(), lr=beta)
         self.critic_optimizer2 = optim.Adam(self.critic2.parameters(), lr=beta)
 
-    def act(self, state):
+    def act(self, state, noise=True):
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
-        self.actor.eval()
-        with torch.no_grad():
-            action = self.actor.forward(state)
-        self.actor.train()
-        action = action.squeeze(0).cpu().detach().numpy()
-        action += self.noise.sample()
+        action = self.actor.forward(state).cpu().data.numpy().flatten()
+        if noise == True:
+            action += np.random.normal(0, 0.1, size=self.action_shape)
 
         return np.clip(action, self.action_low, self.action_high)
 
@@ -123,16 +115,15 @@ class TD3:
             self.update_target()
 
     def _train_critics(self, states, actions, rewards, next_states, dones):
-        with torch.no_grad():
-            noise = actions.data.normal_(0, self.policy_noise).to(self.device)
-            noise = noise.clamp(-self.noise_clip, self.noise_clip)
-            next_actions = (self.target_actor.forward(next_states) + noise)
-            next_actions = next_actions.clamp(-1, 1)
+        noise = torch.normal(torch.zeros(actions.size()), self.policy_noise).to(self.device)
+        noise = noise.clamp(-self.noise_clip, self.noise_clip)
+        next_actions = (self.target_actor.forward(next_states) + noise)
+        next_actions = next_actions.clamp(-1, 1)
 
-            target_Q1 = self.target_critic1(next_states, next_actions)
-            target_Q2 = self.target_critic2(next_states, next_actions)
-            target_Q = torch.min(target_Q1, target_Q2)
-            target_Q = rewards + ((1-dones) * self.gamma * target_Q).detach()
+        target_Q1 = self.target_critic1(next_states, next_actions)
+        target_Q2 = self.target_critic2(next_states, next_actions)
+        target_Q = torch.min(target_Q1, target_Q2)
+        target_Q = rewards + ((1-dones) * self.gamma * target_Q).detach()
         
         current_Q1 = self.critic1(states, actions)
         loss_Q1 = F.mse_loss(current_Q1, target_Q)
