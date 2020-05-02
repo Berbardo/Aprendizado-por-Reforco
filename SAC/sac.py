@@ -8,19 +8,19 @@ from torch.distributions import Normal
 from collections import deque
 
 class Actor(nn.Module):
-    def __init__(self, env, init_w=3e-3, log_std_min=-20, log_std_max=2):
+    def __init__(self, observation_shape, action_shape, init_w=3e-3, log_std_min=-20, log_std_max=2):
         super(Actor, self).__init__()
         self.log_std_min = log_std_min
         self.log_std_max = log_std_max
 
-        self.linear1 = nn.Linear(env.observation_space.shape[0], 256)
+        self.linear1 = nn.Linear(observation_shape, 256)
         self.linear2 = nn.Linear(256, 256)
 
-        self.mean_linear = nn.Linear(256, env.action_space.shape[0])
+        self.mean_linear = nn.Linear(256, action_shape)
         self.mean_linear.weight.data.uniform_(-init_w, init_w)
         self.mean_linear.bias.data.uniform_(-init_w, init_w)
 
-        self.log_std_linear = nn.Linear(256, env.action_space.shape[0])
+        self.log_std_linear = nn.Linear(256, action_shape)
         self.log_std_linear.weight.data.uniform_(-init_w, init_w)
         self.log_std_linear.bias.data.uniform_(-init_w, init_w)
         
@@ -48,10 +48,10 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, env, init_w=3e-3):
+    def __init__(self, observation_shape, action_shape, init_w=3e-3):
         super(Critic, self).__init__()
 
-        self.linear1 = nn.Linear(env.observation_space.shape[0] + env.action_space.shape[0], 256)
+        self.linear1 = nn.Linear(observation_shape + action_shape, 256)
         self.linear2 = nn.Linear(256, 256)
         self.linear3 = nn.Linear(256, 1)
 
@@ -67,13 +67,12 @@ class Critic(nn.Module):
         return q
 
 class SAC:
-    def __init__(self, env, alpha=0.2, gamma=0.99, tau=0.01, p_lr=3e-3, q_lr=3e-3, a_lr=3e-4, policy_freq=1):
+    def __init__(self, observation_space, action_space, alpha=0.2, gamma=0.99, tau=0.01, p_lr=1e-3, q_lr=1e-3, a_lr=3e-4, policy_freq=1):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        self.env  = env
-        self.state_shape = self.env.observation_space.shape[0]
-        self.action_shape = self.env.action_space.shape[0]
-        self.action_range = [env.action_space.low, env.action_space.high]
+        self.state_shape = observation_space.shape[0]
+        self.action_shape = action_space.shape[0]
+        self.action_range = [action_space.low, action_space.high]
 
 
         self.alpha = alpha
@@ -83,12 +82,12 @@ class SAC:
         self.count = 0
         self.policy_freq = policy_freq
 
-        self.actor = Actor(self.env).to(self.device)
+        self.actor = Actor(self.state_shape, self.action_shape).to(self.device)
 
-        self.critic1 = Critic(self.env).to(self.device)
-        self.target_critic1 = Critic(self.env).to(self.device)
-        self.critic2 = Critic(self.env).to(self.device)
-        self.target_critic2 = Critic(self.env).to(self.device)
+        self.critic1 = Critic(self.state_shape, self.action_shape).to(self.device)
+        self.target_critic1 = Critic(self.state_shape, self.action_shape).to(self.device)
+        self.critic2 = Critic(self.state_shape, self.action_shape).to(self.device)
+        self.target_critic2 = Critic(self.state_shape, self.action_shape).to(self.device)
 
         for target_param, param in zip(self.target_critic1.parameters(), self.critic1.parameters()):
             target_param.data.copy_(param.data)
@@ -100,7 +99,7 @@ class SAC:
         self.critic_optimizer1 = optim.Adam(self.critic1.parameters(), lr=q_lr)
         self.critic_optimizer2 = optim.Adam(self.critic2.parameters(), lr=q_lr)
 
-        self.target_entropy = -torch.prod(torch.Tensor(self.env.action_space.shape).to(self.device)).item()
+        self.target_entropy = -torch.prod(torch.Tensor(self.action_shape).to(self.device)).item()
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optim = optim.Adam([self.log_alpha], lr=a_lr)
 
@@ -117,8 +116,9 @@ class SAC:
         return action * (self.action_range[1] - self.action_range[0]) / 2.0 +\
             (self.action_range[1] + self.action_range[0]) / 2.0
 
-    def remember(self, state, action, reward, new_state, done):
-        self.memory.append((np.array(state), action, reward, new_state, done))
+    def remember(self, state, action, reward, new_state, done, n_envs):
+        for i in range(n_envs):
+            self.memory.append((np.array(state[i]), action[i], reward[i], new_state[i], done[i]))
 
     def train(self, batch_size=64):
         if batch_size > len(self.memory):
