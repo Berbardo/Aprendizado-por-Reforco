@@ -1,4 +1,4 @@
-# Implementações de Actor-Critic no ambiente CartPole
+# Implementações de Aprendizado por Reforço
 
 
 
@@ -22,10 +22,26 @@ Proximal Policy Optimization com GAE
 
 ![PPO](img/PPO.gif)
 
-## Shared Networkd PPO
+## Shared Network PPO
 
 Shared Network Proximal Policy Optimization com GAE
 
 Curva de Aprendizado:
 
 ![PPO](img/PPO.png)
+
+## Soft Actor Critic
+
+Soft Actor Critic
+
+BipedalWalker-v2 após 170 episódios
+
+![SAC](img/BipedalSAC.gif)
+
+Pendulum-v0:
+
+![SAC](img/PendulumSAC.gif)
+
+Curva de Aprendizado:
+
+![SAC](img/BipedalSAC.png)
