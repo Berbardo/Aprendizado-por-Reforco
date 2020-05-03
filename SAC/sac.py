@@ -67,7 +67,7 @@ class Critic(nn.Module):
         return q
 
 class SAC:
-    def __init__(self, observation_space, action_space, alpha=0.2, gamma=0.99, tau=0.01, p_lr=1e-3, q_lr=1e-3, a_lr=3e-4, policy_freq=1):
+    def __init__(self, observation_space, action_space, alpha=0.2, gamma=0.99, tau=0.01, p_lr=7e-4, q_lr=7e-4, a_lr=3e-4, policy_freq=1):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.state_shape = observation_space.shape[0]
@@ -102,8 +102,6 @@ class SAC:
         self.target_entropy = -torch.prod(torch.Tensor(self.action_shape).to(self.device)).item()
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
         self.alpha_optim = optim.Adam([self.log_alpha], lr=a_lr)
-
-
 
     def act(self, state, noise=True):
         state = torch.FloatTensor(state).unsqueeze(0).to(self.device)
