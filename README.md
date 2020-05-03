@@ -4,6 +4,20 @@
 
 ![Exemplo](/img/cartpole.gif)
 
+## A2C
+
+Advantage Actor Critic com Generalized Advantage Estimator
+
+### CartPole
+
+Após 10000 timesteps
+
+![A2C](img/CartPoleA2C.gif)
+
+Curva de Aprendizado:
+
+![A2C](img/CartPoleA2C.png)
+
 ## Shared Network AAC
 
 Advantage Actor Critic com uma rede neural compartilhada entre o Actor e o Critic.
