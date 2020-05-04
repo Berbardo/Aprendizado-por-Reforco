@@ -70,7 +70,7 @@ class Critic(nn.Module):
         return v
 
 class A2C:
-    def __init__(self, observation_space, action_space, p_lr=5e-4, v_lr=2e-3, gamma=0.99, lam=0.95, entropy_coef=0.005):
+    def __init__(self, observation_space, action_space, p_lr=5e-4, v_lr=2e-3, gamma=0.99, lam=0.95, entropy_coef=0.001):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
@@ -127,14 +127,11 @@ class A2C:
 
         logp = -probs.log_prob(actions)
 
-        entropy = []
-        for dist in dists:
-            entropy.append(-torch.sum(dist.mean() * torch.log(dist)))
-        entropy = torch.stack(entropy).sum()
+        entropy = probs.entropy().mean()
 
         policy_loss = (logp.unsqueeze(2) * advantages.detach()).mean()
         value_loss = F.mse_loss(v, returns.detach())
-        entropy_loss = self.entropy_coef * (entropy).mean()
+        entropy_loss = - self.entropy_coef * entropy
 
         self.actor_optimizer.zero_grad()
         (policy_loss + entropy_loss).backward()
