@@ -18,8 +18,9 @@ class ExperienceReplay:
         self.length = 0
 
     def update(self, states, actions, rewards, next_states, dones):
-        experience = (states, actions, rewards, next_states, dones)
-        self.memory.append(experience)
+        for i in range(len(states)):
+            experience = (states[i], actions[i], rewards[i], next_states[i], dones[i])
+            self.memory.append(experience)
 
     def sample(self, batch_size):
         states = []
@@ -49,13 +50,14 @@ class Actor(nn.Module):
         self.linear3 = nn.Linear(256, action_shape)
         
     def forward(self, state):
-        a = F.relu(self.linear1(state))
-        a = F.relu(self.linear2(a))
-        probs = F.softmax(self.linear3(a), dim=-1)
+        probs = F.relu(self.linear1(state))
+        probs = F.relu(self.linear2(probs))
+        probs = F.softmax(self.linear3(probs), dim=-1)
+
         dists = Categorical(probs)
         action = dists.sample()
 
-        return action, probs, torch.log(probs)
+        return action, probs, torch.log(probs + 1e-10)
 
 
 class Critic(nn.Module):
@@ -66,8 +68,8 @@ class Critic(nn.Module):
         self.linear2 = nn.Linear(256, 256)
         self.linear3 = nn.Linear(256, action_shape)
 
-        # self.linear3.weight.data.uniform_(-init_w, init_w)
-        # self.linear3.bias.data.uniform_(-init_w, init_w)
+        self.linear3.weight.data.uniform_(-init_w, init_w)
+        self.linear3.bias.data.uniform_(-init_w, init_w)
 
     def forward(self, state):
         q = F.relu(self.linear1(state))
@@ -77,14 +79,12 @@ class Critic(nn.Module):
         return q
 
 class SAC:
-    def __init__(self, observation_space, action_space, alpha=0.2, gamma=0.99, tau=0.01, p_lr=1e-3, q_lr=1e-3, a_lr=3e-4, policy_freq=1):
+    def __init__(self, observation_space, action_space, gamma=0.99, tau=0.01, p_lr=3e-4, q_lr=3e-4, a_lr=3e-4, policy_freq=1):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.state_shape = observation_space.shape[0]
         self.action_shape = action_space.n
 
-
-        self.alpha = alpha
         self.gamma = gamma
         self.tau = tau
         self.memory = ExperienceReplay()
@@ -110,27 +110,30 @@ class SAC:
 
         self.target_entropy = np.log(self.action_shape) * 0.98
         self.log_alpha = torch.zeros(1, requires_grad=True, device=self.device)
+        self.alpha = self.log_alpha.exp()
         self.alpha_optim = optim.Adam([self.log_alpha], lr=a_lr)
 
-    def act(self, state):
+    def act(self, state, test=False):
         state = torch.FloatTensor(state).to(self.device)
-        action, _, _ = self.actor.forward(state)
+        action, probs, _ = self.actor.forward(state)
 
+        if test:
+            return torch.argmax(probs).unsqueeze(0).cpu().detach().numpy()
         return action.cpu().detach().numpy()
 
     def remember(self, state, action, reward, new_state, done):
         self.memory.update(state, action, reward, new_state, done)
 
-    def train(self, batch_size=64):
-        if batch_size > len(self.memory.memory):
+    def train(self, batch_size=32, start_step=1000):
+        if start_step > len(self.memory.memory):
             return
 
         self.count +=1
         
-        (states, actions, rewards, next_states, dones) = self.memory.sample(64)
+        (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
 
         states = torch.FloatTensor(states).to(self.device)
-        actions = torch.FloatTensor(actions).to(self.device)
+        actions = torch.FloatTensor(actions).unsqueeze(-1).to(self.device)
         rewards = torch.FloatTensor(rewards).unsqueeze(-1).to(self.device)
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
@@ -146,17 +149,17 @@ class SAC:
 
             target_Q1 = self.target_critic1.forward(next_states)
             target_Q2 = self.target_critic2.forward(next_states)
-            target_Q = next_probs * (torch.min(target_Q1, target_Q2) - self.alpha * next_logp)
-            target_Q = target_Q.mean(dim=-1).unsqueeze(-1)
+            target_Q = torch.min(target_Q1, target_Q2) - self.alpha * next_logp
+            target_Q = target_Q.gather(-1, next_actions.unsqueeze(-1).long())
             target_Q = rewards + ((1-dones) * self.gamma * target_Q).detach()
         
-        current_Q1 = self.critic1(states).gather(-1, actions.unsqueeze(-1).long())
+        current_Q1 = self.critic1(states).gather(-1, actions.long())
         loss_Q1 = F.mse_loss(current_Q1, target_Q)
         self.critic_optimizer1.zero_grad()
         loss_Q1.backward()
         self.critic_optimizer1.step()
         
-        current_Q2 = self.critic2(states).gather(-1, actions.unsqueeze(-1).long())
+        current_Q2 = self.critic2(states).gather(-1, actions.long())
         loss_Q2 = F.mse_loss(current_Q2, target_Q)
         self.critic_optimizer2.zero_grad()
         loss_Q2.backward()
@@ -164,9 +167,10 @@ class SAC:
 
     def _train_actor(self, states, actions, rewards, next_states, dones):
         new_actions, probs, logp = self.actor.forward(states)
+
         min_q = torch.min(self.critic1.forward(states), self.critic2.forward(states))
 
-        policy_loss = torch.sum(probs * (self.alpha * logp - min_q), dim=-1, keepdim=True).mean()
+        policy_loss = (probs * (self.alpha * logp - min_q)).mean()
 
         self.actor_optimizer.zero_grad()
         policy_loss.backward()
