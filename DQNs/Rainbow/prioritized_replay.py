@@ -1,6 +1,7 @@
 import numpy as np
 import random
 import operator
+from collections import deque
 
 class SegmentTree(object):
     def __init__(self, capacity, operation, neutral_element):
@@ -136,7 +137,7 @@ class MinSegmentTree(SegmentTree):
         return super(MinSegmentTree, self).reduce(start, end)
 
 class ReplayBuffer(object):
-    def __init__(self, size):
+    def __init__(self, size, n_step=3, n_envs=1, gamma=0.99):
         """Create Replay buffer.
         Parameters
         ----------
@@ -144,6 +145,9 @@ class ReplayBuffer(object):
             Max number of transitions to store in the buffer. When the buffer
             overflows the old memories are dropped.
         """
+        self.n_step_buffer = [deque(maxlen=n_step) for i in range(n_envs)]
+        self.n_step = n_step
+        self.gamma = gamma
         self._storage = []
         self._maxsize = size
         self._next_idx = 0
@@ -151,14 +155,40 @@ class ReplayBuffer(object):
     def __len__(self):
         return len(self._storage)
 
-    def add(self, obs_t, action, reward, obs_tp1, done):
+    def add(self, obs_t, action, reward, obs_tp1, done, i):
         data = (obs_t, action, reward, obs_tp1, done)
+
+        self.n_step_buffer[i].append(data)
+
+        # single step transition is not ready
+        if len(self.n_step_buffer[i]) < self.n_step:
+            return ()
+
+        rew, next_obs, done = self._get_n_step_info(
+            self.n_step_buffer[i], self.gamma
+        )
+        obs, act = self.n_step_buffer[i][0][:2]
+
+        data = (obs, act, rew, next_obs, done)
 
         if self._next_idx >= len(self._storage):
             self._storage.append(data)
         else:
             self._storage[self._next_idx] = data
         self._next_idx = (self._next_idx + 1) % self._maxsize
+
+    def _get_n_step_info(self, n_step_buffer, gamma):
+        """Return n step rew, next_obs, and done."""
+        # info of the last transition
+        rew, next_obs, done = n_step_buffer[-1][-3:]
+
+        for transition in reversed(list(n_step_buffer)[:-1]):
+            r, n_o, d = transition[-3:]
+
+            rew = r + gamma * rew * (1 - d)
+            next_obs, done = (n_o, d) if d else (next_obs, done)
+
+        return rew, next_obs, done
 
     def _encode_sample(self, idxes):
         obses_t, actions, rewards, obses_tp1, dones = [], [], [], [], []
@@ -197,7 +227,7 @@ class ReplayBuffer(object):
 
 
 class PrioritizedReplayBuffer(ReplayBuffer):
-    def __init__(self, size, alpha):
+    def __init__(self, size, alpha, n_step=3, n_envs=1, gamma=0.99):
         """Create Prioritized Replay buffer.
         Parameters
         ----------
@@ -211,7 +241,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         --------
         ReplayBuffer.__init__
         """
-        super(PrioritizedReplayBuffer, self).__init__(size)
+        super(PrioritizedReplayBuffer, self).__init__(size, n_step, n_envs, gamma)
         assert alpha >= 0
         self._alpha = alpha
 
