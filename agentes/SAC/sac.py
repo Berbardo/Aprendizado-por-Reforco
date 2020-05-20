@@ -114,9 +114,9 @@ class SAC:
         return action * (self.action_range[1] - self.action_range[0]) / 2.0 +\
             (self.action_range[1] + self.action_range[0]) / 2.0
 
-    def remember(self, state, action, reward, new_state, done, n_envs):
-        for i in range(n_envs):
-            self.memory.append((np.array(state[i]), action[i], reward[i], new_state[i], done[i]))
+    def remember(self, state, action, reward, new_state, done):
+        for i in range(len(state)):
+            self.memory.append((state[i], action[i], reward[i], new_state[i], done[i]))
 
     def train(self, batch_size=64):
         if batch_size > len(self.memory):

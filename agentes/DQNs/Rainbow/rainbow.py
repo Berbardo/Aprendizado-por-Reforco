@@ -165,3 +165,10 @@ class Rainbow:
 
     def hard_update_target(self):
         self.dqn_target.load_state_dict(self.dqn.state_dict())
+
+    def save_model(self, path):
+        torch.save(self.dqn.state_dict(), path)
+    
+    def load_model(self, path):
+        self.dqn.load_state_dict(torch.load(path))
+

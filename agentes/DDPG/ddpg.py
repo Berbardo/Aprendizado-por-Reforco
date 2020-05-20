@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from collections import deque
-from ou_noise import OUNoise
+from rl_utils.ou_noise import OUNoise
 
 class Actor(nn.Module):
     def __init__(self, env):
