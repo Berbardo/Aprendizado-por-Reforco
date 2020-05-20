@@ -6,9 +6,9 @@ import torch.optim as optim
 import torch.nn.functional as F
 from torch.nn.utils import clip_grad_norm_
 
-from noisy_linear import NoisyLinear
-from experience_replay import ReplayBuffer
-from prioritized_replay import PrioritizedReplayBuffer
+from utils.noisy_linear import NoisyLinear
+from utils.experience_replay import ExperienceReplay
+from utils.prioritized_replay import PrioritizedReplayBuffer
 
 class Network(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, atom_dim: int, support):
@@ -66,7 +66,7 @@ class Rainbow:
         self.tau = tau
         self.beta = 0.6
         self.n_step = n_step
-        self.memory = PrioritizedReplayBuffer(10000, 0.5, n_step, n_envs, gamma)
+        self.memory = PrioritizedReplayBuffer(10000, 0.5)
         self.action_space = action_space
 
         self.v_min = -10
@@ -91,7 +91,7 @@ class Rainbow:
 
     def remember(self, states, actions, rewards, new_states, dones):
         for i in range(len(states)):
-            self.memory.add(states[i], actions[i], rewards[i], new_states[i], dones[i], i)
+            self.memory.add(states[i], actions[i], rewards[i], new_states[i], dones[i])
 
     def train(self, batch_size=32):
         if 500 > len(self.memory._storage):

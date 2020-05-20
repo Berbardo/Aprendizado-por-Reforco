@@ -23,6 +23,7 @@ __pycache__
 *.bak
 .ipynb_checkpoints
 .tox
+.vscode
 .DS_Store
 \#*#
 .#*

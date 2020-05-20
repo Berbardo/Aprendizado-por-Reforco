@@ -5,7 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from prioritized_replay import PrioritizedReplayBuffer
+from utils.prioritized_replay import PrioritizedReplayBuffer
 
 class Network(nn.Module):
     def __init__(self, in_dim: int, out_dim: int, atom_dim: int, support):
@@ -47,7 +47,7 @@ class Network(nn.Module):
         
         return dist
 
-class Categorical:
+class CategoricalDQN:
     def __init__(self, observation_space, action_space, lr=1e-3, gamma=0.99, tau=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 

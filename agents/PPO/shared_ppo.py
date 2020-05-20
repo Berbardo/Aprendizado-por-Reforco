@@ -1,45 +1,11 @@
-import random
 import numpy as np
-from collections import deque
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Categorical
 
-class ExperienceReplay:
-
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.memory = deque(maxlen=1000)
-        self.length = 0
-
-    def update(self, states, actions, log_probs, rewards, next_states, dones):
-        experience = (states, actions, log_probs, rewards, next_states, dones)
-        self.length += 1
-        self.memory.append(experience)
-
-    def sample(self):
-        states = []
-        actions = []
-        log_probs = []
-        rewards = []
-        next_states = []
-        dones = []
-
-        for experience in self.memory:
-            state, action, prob, reward, next_state, done = experience
-            states.append(state)
-            actions.append(action)
-            log_probs.append(prob)
-            rewards.append(reward)
-            next_states.append(next_state)
-            dones.append(done)
-
-        self.reset()
-        return (states, actions, log_probs, rewards, next_states, dones)
+from utils.experience_replay import ExperienceReplay
 
 class ActorCritic(nn.Module):
     def __init__(self, observation_shape, action_shape):
@@ -62,8 +28,9 @@ class ActorCritic(nn.Module):
         v = self.value3(v)
 
         return probs, v
+
 class SharedPPO:
-    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99, lam=0.95, entropy_coef=0.001, clip=0.2):
+    def __init__(self, observation_space, action_space, lr=3e-4, gamma=0.99, lam=0.95, entropy_coef=0.005, clip=0.2):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.gamma = gamma
@@ -76,18 +43,25 @@ class SharedPPO:
         self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
         self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr)
 
-    def act(self, state):
+    def prob(self, state):
         state = torch.FloatTensor(state).to(self.device)
         dists, _ = self.actorcritic.forward(state)
         probs = Categorical(dists)
-        action = probs.sample()
-        return action.cpu().detach().numpy(), probs.log_prob(action)
+        return probs
 
-    def remember(self, state, action, log_probs, reward, new_state, done):
+    def act(self, state):
+        probs = self.prob(state)
+        action = probs.sample()
+        return action.cpu().detach().numpy()
+
+    def remember(self, state, action, reward, new_state, done):
+        probs = self.prob(state)
+        action_torch = torch.LongTensor(action).to(self.device)
+        log_probs = probs.log_prob(action_torch)
         self.memory.update(state, action, log_probs, reward, new_state, done)
 
-    def train(self, batch_size=32):
-        if self.memory.length < 32:
+    def train(self, batch_size=64):
+        if self.memory.length < 64:
             return
 
         (states, actions, log_probs, rewards, next_states, dones) = self.memory.sample()

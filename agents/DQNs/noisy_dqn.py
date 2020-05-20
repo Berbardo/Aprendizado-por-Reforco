@@ -5,8 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from noisy_linear import NoisyLinear, FactorizedNoisyLinear
-from prioritized_replay import PrioritizedReplayBuffer
+from utils.noisy_linear import NoisyLinear
+from utils.prioritized_replay import PrioritizedReplayBuffer
 
 class NoisyNetwork(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
@@ -19,11 +19,11 @@ class NoisyNetwork(nn.Module):
             nn.ReLU()
         )
 
-        self.value1 = FactorizedNoisyLinear(128, 128)
-        self.value2 = FactorizedNoisyLinear(128, 1)
+        self.value1 = NoisyLinear(128, 128)
+        self.value2 = NoisyLinear(128, 1)
 
-        self.advantage1 = FactorizedNoisyLinear(128, 128)
-        self.advantage2 = FactorizedNoisyLinear(128, out_dim)
+        self.advantage1 = NoisyLinear(128, 128)
+        self.advantage2 = NoisyLinear(128, out_dim)
 
     def forward(self, state):
         x = self.feature_layer(state)
@@ -45,13 +45,13 @@ class NoisyNetwork(nn.Module):
         self.advantage1.reset_noise()
         self.advantage2.reset_noise()
 
-class Noisy:
+class NoisyDQN:
     def __init__(self, observation_space, action_space, lr=1e-3, gamma=0.99, tau=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
         self.tau = tau
-        self.memory = PrioritizedReplayBuffer(100000, 0.6)
+        self.memory = PrioritizedReplayBuffer(10000, 0.6)
         self.beta = 0.6
 
         self.update_count = 0
@@ -110,6 +110,8 @@ class Noisy:
             priorities = td_error.detach().cpu().numpy() + 1e-6
             self.memory.update_priorities(batch_indexes, priorities)
 
+            self.dqn.reset_noise()
+            self.dqn_target.reset_noise()
 
     def update_target(self):
         for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):

@@ -1,54 +1,33 @@
-import random
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-
-from prioritized_replay import PrioritizedReplayBuffer
+from utils.experience_replay import ExperienceReplay
 
 class Network(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
         super(Network, self).__init__()
 
-        self.feauture_layer = nn.Sequential(
-            nn.Linear(in_dim, 128),
+        self.layers = nn.Sequential(
+            nn.Linear(in_dim, 64), 
             nn.ReLU(),
-            nn.Linear(128, 128),
-            nn.ReLU()
+            nn.Linear(64, 64), 
+            nn.ReLU(), 
+            nn.Linear(64, out_dim)
         )
 
-        self.value = nn.Sequential(
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, 1)
-        )
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.layers(x)
 
-        self.advantage = nn.Sequential(
-            nn.Linear(128, 128),
-            nn.ReLU(),
-            nn.Linear(128, out_dim)
-        )
-
-    def forward(self, state):
-        x = self.feauture_layer(state)
-        values = self.value(x)
-        advantages = self.advantage(x)
-
-        qvals = values + (advantages - advantages.mean())
-
-        return qvals
-
-class DuelingDDQN:
-    def __init__(self, observation_space, action_space, lr=1e-3, gamma=0.99, tau=0.01):
+class DQN:
+    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.tau = tau
-        self.memory = PrioritizedReplayBuffer(100000, 0.6)
+        self.memory = ExperienceReplay(1000000)
         self.action_space = action_space
 
-        self.beta = 0.6
         self.epsilon = 0.7
         self.epsilon_decay = 0.995
         self.min_epsilon = 0.01
@@ -75,48 +54,37 @@ class DuelingDDQN:
 
         return action
 
-    def remember(self, states, actions, rewards, new_states, dones):
-        for i in range(len(states)):
-            self.memory.add(states[i], actions[i], rewards[i], new_states[i], dones[i])
+    def remember(self, state, action, reward, new_state, done):
+        self.memory.update(state, action, reward, new_state, done)
 
     def train(self, batch_size=32, epochs=1):
-        if 1000 > len(self.memory._storage):
+        if 100 > len(self.memory.memory):
             return
         
         for epoch in range(epochs):
             self.update_count +=1
 
-            self.beta = self.beta + self.update_count/100000 * (1.0 - self.beta)
-
-            (states, actions, rewards, next_states, dones, weights, batch_indexes) = self.memory.sample(batch_size, self.beta)
+            (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
 
             states = torch.FloatTensor(states).to(self.device)
             actions = torch.FloatTensor(actions).unsqueeze(-1).to(self.device)
             rewards = torch.FloatTensor(rewards).unsqueeze(-1).to(self.device)
             next_states = torch.FloatTensor(next_states).to(self.device)
             dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
-            weights = torch.FloatTensor(weights).unsqueeze(-1).to(self.device)
-
 
             q = self.dqn.forward(states).gather(-1, actions.long())
-            a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)
-            q2 = self.dqn_target.forward(next_states).gather(-1, a2).detach()
+            q2 = self.dqn_target.forward(next_states).max(dim=-1, keepdim=True)[0].detach()
 
             target = (rewards + (1 - dones) * self.gamma * q2).to(self.device)
 
-            td_error = F.mse_loss(q, target, reduction="none")
-            loss = torch.mean(td_error * weights)
+            loss = F.mse_loss(q, target)
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            self.update_target()
-
-            priorities = td_error.detach().cpu().numpy() + 1e-6
-            self.memory.update_priorities(batch_indexes, priorities)
-
+            if self.update_count % 100 == 0:
+                self.update_target()
 
     def update_target(self):
-        for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+        self.dqn_target.load_state_dict(self.dqn.state_dict())

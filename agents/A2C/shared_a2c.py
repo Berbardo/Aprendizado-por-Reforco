@@ -5,40 +5,28 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Categorical
-from rl_utils.experience_replay import ExperienceReplay
+from utils.experience_replay import ExperienceReplay
 
-class Actor(nn.Module):
+class ActorCritic(nn.Module):
     def __init__(self, observation_shape, action_shape):
-        super(Actor, self).__init__()
-
-        self.linear1 = nn.Linear(observation_shape, 128)
-        self.linear2 = nn.Linear(128, 128)
-        self.linear3 = nn.Linear(128, action_shape)
-
-    def forward(self, state):
-        dists = F.relu(self.linear1(state))
-        dists = F.relu(self.linear2(dists))
-        dists = F.softmax(self.linear3(dists), dim=1)
-
-        return dists
-
-class Critic(nn.Module):
-    def __init__(self, observation_shape):
-        super(Critic, self).__init__()
-
-        self.linear1 = nn.Linear(observation_shape, 256)
-        self.linear2 = nn.Linear(256, 256)
-        self.linear3 = nn.Linear(256, 1)
+        super(ActorCritic, self).__init__()
+        self.policy1 = nn.Linear(observation_shape, 256)
+        self.policy2 = nn.Linear(256, action_shape)
+        
+        self.value1 = nn.Linear(observation_shape, 256)
+        self.value2 = nn.Linear(256, 1)
 
     def forward(self, state):
-        v = F.relu(self.linear1(state))
-        v = F.relu(self.linear2(v))
-        v = self.linear3(v)
+        probs = F.relu(self.policy1(state))
+        probs = F.softmax(self.policy2(probs), dim=1)
+        
+        v = F.relu(self.value1(state))
+        v = self.value2(v)
 
-        return v
+        return probs, v
 
-class A2C:
-    def __init__(self, observation_space, action_space, p_lr=5e-4, v_lr=2e-3, gamma=0.99, lam=0.95, entropy_coef=0.001):
+class SharedA2C:
+    def __init__(self, observation_space, action_space, lr=5e-4, gamma=0.99, lam=0.95, entropy_coef=0.001):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
@@ -47,15 +35,12 @@ class A2C:
 
         self.memory = ExperienceReplay()
 
-        self.actor = Actor(observation_space.shape[0], action_space.n).to(self.device)
-        self.critic = Critic(observation_space.shape[0]).to(self.device)
-
-        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=p_lr)
-        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=v_lr)
+        self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
+        self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr)
 
     def act(self, state):
         state = torch.FloatTensor(state).to(self.device)
-        dists = self.actor.forward(state)
+        dists, _ = self.actorcritic.forward(state)
         probs = Categorical(dists)
         action = probs.sample().cpu().detach().numpy()
         return action
@@ -75,8 +60,8 @@ class A2C:
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).unsqueeze(2).to(self.device)
 
-        v = self.critic.forward(states)
-        v2 = self.critic.forward(next_states)
+        dists, v = self.actorcritic.forward(states)
+        _, v2 = self.actorcritic.forward(next_states)
 
         deltas = rewards + (1 - dones) * self.gamma * v2 - v
 
@@ -90,7 +75,6 @@ class A2C:
             returns[i] = rewards[i] + self.gamma * (1 - dones[i]) * returns[i + 1]
             advantages[i] = deltas[i] + self.gamma * self.lam * (1 - dones[i]) * advantages[i + 1]
 
-        dists = self.actor.forward(states)
         probs = Categorical(dists)
 
         logp = -probs.log_prob(actions)
@@ -101,13 +85,8 @@ class A2C:
         value_loss = F.mse_loss(v, returns.detach())
         entropy_loss = - self.entropy_coef * entropy
 
-        self.actor_optimizer.zero_grad()
-        (policy_loss + entropy_loss).backward()
-        self.actor_optimizer.step()
+        total_loss = policy_loss + value_loss + entropy_loss
 
-        self.critic_optimizer.zero_grad()
-        value_loss.backward()
-        self.critic_optimizer.step()
-
-        self.trajectory = []
-
+        self.actorcritic_optimizer.zero_grad()
+        total_loss.backward()
+        self.actorcritic_optimizer.step()

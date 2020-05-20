@@ -4,65 +4,51 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from collections import deque
 
-class ExperienceReplay:
-
-    def __init__(self, length):
-        self.reset(length)
-
-    def reset(self, length):
-        self.memory = deque(maxlen=length)
-        self.length = 0
-
-    def update(self, states, actions, rewards, next_states, dones):
-        for i in range(len(states)):
-            experience = (states[i], actions[i], rewards[i], next_states[i], dones[i])
-            self.memory.append(experience)
-
-    def sample(self, batch_size):
-        states = []
-        actions = []
-        rewards = []
-        next_states = []
-        dones = []
-
-        batch = random.sample(self.memory, batch_size)
-
-        for experience in batch:
-            state, action, reward, next_state, done = experience
-            states.append(state)
-            actions.append(action)
-            rewards.append(reward)
-            next_states.append(next_state)
-            dones.append(done)
-
-        return (states, actions, rewards, next_states, dones)
-
+from utils.prioritized_replay import PrioritizedReplayBuffer
 
 class Network(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
         super(Network, self).__init__()
 
-        self.layers = nn.Sequential(
-            nn.Linear(in_dim, 64), 
+        self.feauture_layer = nn.Sequential(
+            nn.Linear(in_dim, 128),
             nn.ReLU(),
-            nn.Linear(64, 64), 
-            nn.ReLU(), 
-            nn.Linear(64, out_dim)
+            nn.Linear(128, 128),
+            nn.ReLU()
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.layers(x)
+        self.value = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
 
-class DDQN:
-    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99):
+        self.advantage = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, out_dim)
+        )
+
+    def forward(self, state):
+        x = self.feauture_layer(state)
+        values = self.value(x)
+        advantages = self.advantage(x)
+
+        qvals = values + (advantages - advantages.mean())
+
+        return qvals
+
+class DuelingDDQN:
+    def __init__(self, observation_space, action_space, lr=1e-3, gamma=0.99, tau=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = ExperienceReplay(10000)
+        self.tau = tau
+        self.memory = PrioritizedReplayBuffer(100000, 0.6)
         self.action_space = action_space
 
+        self.beta = 0.6
         self.epsilon = 0.7
         self.epsilon_decay = 0.995
         self.min_epsilon = 0.01
@@ -89,23 +75,28 @@ class DDQN:
 
         return action
 
-    def remember(self, state, action, reward, new_state, done):
-        self.memory.update(state, action, reward, new_state, done)
+    def remember(self, states, actions, rewards, new_states, dones):
+        for i in range(len(states)):
+            self.memory.add(states[i], actions[i], rewards[i], new_states[i], dones[i])
 
     def train(self, batch_size=32, epochs=1):
-        if 100 > len(self.memory.memory):
+        if 1000 > len(self.memory._storage):
             return
         
         for epoch in range(epochs):
             self.update_count +=1
 
-            (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
+            self.beta = self.beta + self.update_count/100000 * (1.0 - self.beta)
+
+            (states, actions, rewards, next_states, dones, weights, batch_indexes) = self.memory.sample(batch_size, self.beta)
 
             states = torch.FloatTensor(states).to(self.device)
             actions = torch.FloatTensor(actions).unsqueeze(-1).to(self.device)
             rewards = torch.FloatTensor(rewards).unsqueeze(-1).to(self.device)
             next_states = torch.FloatTensor(next_states).to(self.device)
             dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
+            weights = torch.FloatTensor(weights).unsqueeze(-1).to(self.device)
+
 
             q = self.dqn.forward(states).gather(-1, actions.long())
             a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)
@@ -113,14 +104,19 @@ class DDQN:
 
             target = (rewards + (1 - dones) * self.gamma * q2).to(self.device)
 
-            loss = F.mse_loss(q, target)
+            td_error = F.mse_loss(q, target, reduction="none")
+            loss = torch.mean(td_error * weights)
 
             self.optimizer.zero_grad()
             loss.backward()
             self.optimizer.step()
 
-            if self.update_count % 200 == 0:
-                self.update_target()
+            self.update_target()
+
+            priorities = td_error.detach().cpu().numpy() + 1e-6
+            self.memory.update_priorities(batch_indexes, priorities)
+
 
     def update_target(self):
-        self.dqn_target.load_state_dict(self.dqn.state_dict())
+        for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
+            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
