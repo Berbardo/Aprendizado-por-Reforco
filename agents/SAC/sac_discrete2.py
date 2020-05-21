@@ -14,9 +14,9 @@ class Actor(nn.Module):
     def __init__(self, observation_shape, action_shape):
         super(Actor, self).__init__()
 
-        self.linear1 = nn.Linear(observation_shape, 256)
-        self.linear2 = nn.Linear(256, 256)
-        self.linear3 = nn.Linear(256, action_shape)
+        self.linear1 = nn.Linear(observation_shape, 128)
+        self.linear2 = nn.Linear(128, 128)
+        self.linear3 = nn.Linear(128, action_shape)
         
     def forward(self, state):
         probs = F.relu(self.linear1(state))
@@ -30,25 +30,40 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, observation_shape, action_shape, init_w=3e-3):
+    def __init__(self, observation_shape, action_shape):
         super(Critic, self).__init__()
 
-        self.linear1 = nn.Linear(observation_shape, 256)
-        self.linear2 = nn.Linear(256, 256)
-        self.linear3 = nn.Linear(256, action_shape)
+        self.feauture_layer = nn.Sequential(
+            nn.Linear(observation_shape, 128),
+            nn.ReLU(),
+            nn.Linear(128, 128),
+            nn.ReLU()
+        )
 
-        self.linear3.weight.data.uniform_(-init_w, init_w)
-        self.linear3.bias.data.uniform_(-init_w, init_w)
+        self.value = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, 1)
+        )
+
+        self.advantage = nn.Sequential(
+            nn.Linear(128, 128),
+            nn.ReLU(),
+            nn.Linear(128, action_shape)
+        )
 
     def forward(self, state):
-        q = F.relu(self.linear1(state))
-        q = F.relu(self.linear2(q))
-        q = self.linear3(q)
 
-        return q
+        x = self.feauture_layer(state)
+        values = self.value(x)
+        advantages = self.advantage(x)
+
+        qvals = values + (advantages - advantages.mean())
+
+        return qvals
 
 class DiscreteSAC:
-    def __init__(self, observation_space, action_space, gamma=0.99, tau=0.01, p_lr=3e-4, q_lr=3e-4, a_lr=3e-4, policy_freq=1):
+    def __init__(self, observation_space, action_space, gamma=0.99, tau=0.01, p_lr=1e-3, q_lr=1e-3, a_lr=3e-4, policy_freq=1):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.state_shape = observation_space.shape[0]
@@ -93,7 +108,7 @@ class DiscreteSAC:
     def remember(self, state, action, reward, new_state, done):
         self.memory.update(state, action, reward, new_state, done)
 
-    def train(self, batch_size=64, start_step=500):
+    def train(self, batch_size=32, start_step=1000):
         if start_step > len(self.memory.memory):
             return
 
@@ -123,13 +138,13 @@ class DiscreteSAC:
             target_Q = rewards + ((1-dones) * self.gamma * target_Q).detach()
         
         current_Q1 = self.critic1(states).gather(-1, actions.long())
-        loss_Q1 = F.mse_loss(current_Q1, target_Q)
+        loss_Q1 = F.smooth_l1_loss(current_Q1, target_Q)
         self.critic_optimizer1.zero_grad()
         loss_Q1.backward()
         self.critic_optimizer1.step()
         
         current_Q2 = self.critic2(states).gather(-1, actions.long())
-        loss_Q2 = F.mse_loss(current_Q2, target_Q)
+        loss_Q2 = F.smooth_l1_loss(current_Q2, target_Q)
         self.critic_optimizer2.zero_grad()
         loss_Q2.backward()
         self.critic_optimizer2.step()
@@ -153,7 +168,7 @@ class DiscreteSAC:
         self.alpha_optim.step()
         self.alpha = self.log_alpha.exp()
 
-    def update_target(self):       
+    def update_target(self):
         for target_param, param in zip(self.target_critic1.parameters(), self.critic1.parameters()):
             target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
 
