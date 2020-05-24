@@ -1,146 +1,126 @@
-import random
 import numpy as np
-from collections import deque
-import tensorflow as tf
-from tensorflow.keras.models import Model
-from tensorflow.keras.layers import Dense, Input
+import torch
+import torch.nn as nn
+import torch.optim as optim
+import torch.nn.functional as F
+from torch.distributions import Categorical
 
-clip = 0.2
-entropy = 0.005
-vf_coef = 0.5
+from utils.experience_replay import ExperienceReplay
 
-def ppo_loss(y_actual, y_pred):
-    actions = tf.cast(y_actual[:, 0], tf.int32)
-    selector = tf.stack([tf.range(tf.size(actions)), actions], axis=1)
-    adv = y_actual[:, 1]
-    probs = tf.cast(y_actual[:, 2:], tf.float32)
+class Actor(nn.Module):
+    def __init__(self, observation_shape, action_shape):
+        super(Actor, self).__init__()
+        self.policy1 = nn.Linear(observation_shape, 64)
+        self.policy2 = nn.Linear(64, 64)
+        self.policy3 = nn.Linear(64, action_shape)
 
-    prob = tf.gather_nd(y_pred, selector)
-    old_prob = tf.gather_nd(probs, selector)
-    ratio = prob/(old_prob + 1e-10)
-    p1 = ratio * adv
-    p2 = tf.clip_by_value(ratio, 1 - clip, 1 + clip) * adv
-    
-    actor_loss = -tf.math.reduce_mean(tf.math.minimum(p1, p2))
-    ent_loss = -tf.math.reduce_mean(prob * tf.math.log(prob + 1e-10))
-    
-    loss = actor_loss - entropy * ent_loss
-    return loss
+    def forward(self, state):
+        probs = F.tanh(self.policy1(state))
+        probs = F.tanh(self.policy2(probs))
+        probs = F.softmax(self.policy3(probs), dim=-1)
 
-class Actor:
-    def __init__(self, env, lr=0.00025):
-        self.env = env
-        self.lr = lr
-        self.state_shape = self.env.observation_space.shape
-        self.action_size = self.env.action_space.n
-        self.model = self.create_model()
-        
-    def create_model(self):
-        input_layer = Input(shape=self.state_shape)
-        dense1 = Dense(64, activation='relu')(input_layer)
-        dense2 = Dense(64, activation='relu')(dense1)
-        probs = Dense(self.action_size, activation='softmax')(dense2)
-        actor = Model(inputs= input_layer, outputs= probs)
-        actor.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.lr), loss=ppo_loss)
-        return actor
-    
-    def act(self, state):
-        state = state.reshape(1, *state.shape)
-        probs = self.model.predict(state).flatten()
-        action = np.random.choice(self.action_size, 1, p=probs)[0]
-        return action, probs
+        return probs
 
-class Critic:
-    def __init__(self, env, lr=0.00025):
-        self.env = env
-        self.lr = lr
-        self.state_shape = self.env.observation_space.shape
-        self.action_size = self.env.action_space.n
-        self.model = self.create_model()
-        
-    def create_model(self):
-        input_layer = Input(shape=self.state_shape)
-        dense1 = Dense(64, activation='relu')(input_layer)
-        dense2 = Dense(64, activation='relu')(dense1)
-        value = Dense(1, activation='linear')(dense2)
+class Critic(nn.Module):
+    def __init__(self, observation_shape, action_shape):
+        super(Critic, self).__init__()        
+        self.value1 = nn.Linear(observation_shape, 64)
+        self.value2 = nn.Linear(64, 64)
+        self.value3 = nn.Linear(64, 1)
 
-        critic = Model(inputs= input_layer, outputs= value)
-        critic.compile(optimizer=tf.keras.optimizers.Adam(learning_rate=self.lr), loss="mse")
-        return critic
-        
-    def v(self, state):
-        return self.model.predict(state.reshape(1, *state.shape))[0]
+    def forward(self, state):        
+        v = F.tanh(self.value1(state))
+        v = F.tanh(self.value2(v))
+        v = self.value3(v)
+
+        return v
 
 class PPO:
-    def __init__(self, env, alpha=0.00035, beta=0.0005, epsilon=.7, gamma=0.99, lam=0.95):
-        self.env  = env
-        self.state_shape = self.env.observation_space.shape
-        self.action_size = self.env.action_space.n
-        self.epsilon = epsilon
-        self.epsilon_decay = 0.999
-        self.epsilon_min = 0.001
+    def __init__(self, observation_space, action_space, p_lr=3e-4, q_lr=1e-3, gamma=0.99, lam=0.95, entropy_coef=0.05, clip=0.2):
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        
         self.gamma = gamma
         self.lam = lam
-        self.memory = deque(maxlen=4000)
+        self.entropy_coef = entropy_coef
+        self.clip = clip
 
-        self.actor = Actor(self.env, alpha)
-        self.critic = Critic(self.env, beta)
+        self.memory = ExperienceReplay()
 
-    def v(self, state):
-        return self.critic.v(state)
+        self.actor = Actor(observation_space.shape[0], action_space.n).to(self.device)
+        self.actor_optimizer = optim.Adam(self.actor.parameters(), lr=p_lr, eps=1e-5)
+        self.critic = Critic(observation_space.shape[0], action_space.n).to(self.device)
+        self.critic_optimizer = optim.Adam(self.critic.parameters(), lr=q_lr, eps=1e-5)
+
+    def prob(self, state):
+        state = torch.FloatTensor(state).to(self.device)
+        dists = self.actor.forward(state)
+        probs = Categorical(dists)
+        return probs
 
     def act(self, state):
-        self.epsilon *= self.epsilon_decay
-        self.epsilon = max(self.epsilon, self.epsilon_min)
+        probs = self.prob(state)
+        action = probs.sample()
+        return action.cpu().detach().numpy()
 
-        action, probs = self.actor.act(state)
-        if np.random.random() < self.epsilon:
-            return self.env.action_space.sample(), probs
-        return action, probs
+    def remember(self, state, action, reward, new_state, done):
+        probs = self.prob(state)
+        action_torch = torch.LongTensor(action).to(self.device)
+        log_probs = probs.log_prob(action_torch)
+        self.memory.update(state, action, log_probs, reward, new_state, done)
 
-    def remember(self, state, action, probs, reward, new_state, done):
-        self.memory.append((state, action, probs, reward, new_state, done))
+    def compute_gae(self, values, dones, rewards):
+        returns = torch.zeros_like(rewards).to(self.device)
+        advantages = torch.zeros_like(rewards).to(self.device)
+        deltas = torch.zeros_like(rewards).to(self.device)
 
-    def train(self, batch_size=128):
-        if batch_size > len(self.memory):
+        returns[-1] = rewards[-1] + self.gamma * (1 - dones[-1]) * rewards[-1]
+        advantages[-1] = returns[-1] - values[-1]
+
+        for i in reversed(range(len(rewards) - 1)):
+            delta = rewards[i] + self.gamma * (1 - dones[i]) * values[i+1] - values[i]
+            advantages[i] = delta + self.gamma * self.lam * (1 - dones[i]) * advantages[i + 1]
+            returns[i] = advantages[i] + values[i]
+
+        return returns, (advantages - advantages.mean()) / (advantages.std() + 1e-10)
+
+    def train(self, batch_size=64, epochs=8):
+        if self.memory.length < batch_size:
             return
-        minibatch = self.memory
 
-        states = []
-        actions = []
-        probs = []
-        y = []
-        adv = []
-        gae = 0
-        for (s, a, p, r, s2, done) in reversed(minibatch):
-            v = self.v(s)
-            if done:
-                target = -10
-                delta = target - v
-            else:
-                v2 = self.v(s2)[0]
-                target = r + self.gamma * v2
-                delta = r + self.gamma * v2 - v
-            
-            gae = delta + self.gamma * self.lam * gae
-            
-            states.append(s)
-            actions.append(a)
-            probs.append(p)
-            y.append(target)
-            adv.append(gae)
+        (states, actions, log_probs, rewards, next_states, dones) = self.memory.sample()
+
+        states = torch.FloatTensor(states).to(self.device)
+        actions = torch.FloatTensor(actions).to(self.device)
+        rewards = torch.FloatTensor(rewards).unsqueeze(-1).to(self.device)
+        next_states = torch.FloatTensor(next_states).to(self.device)
+        dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
+        log_probs = torch.stack(log_probs).to(self.device).detach()
+
+        v = self.critic.forward(states)
+        returns, advantages = self.compute_gae(v, dones, rewards)
         
-        adv = (adv - np.mean(adv)) / np.maximum(np.std(adv), 1e-10)
-        states = np.array(states)
-        probs = np.array(probs)
+        for _ in range(epochs):
+            dists = self.actor.forward(states)
+            v = self.critic.forward(states)
 
-        y_actual = np.empty(shape=(len(states), 2 + self.action_size))
-        y_actual[:, 0] = actions
-        y_actual[:, 1] = adv.flatten()
-        for i in range(self.action_size):
-            y_actual[:, 2 + i] = probs[:, i]
-        
-        self.actor.model.fit(states, np.array(y_actual), epochs=8, verbose=0)
-        self.critic.model.fit(states, np.array(y), epochs=8, verbose=0)
+            new_probs = Categorical(dists)
+            new_logprobs = new_probs.log_prob(actions)
+            entropy = new_probs.entropy().mean()
+            ratios = torch.exp(new_logprobs.unsqueeze(-1) - log_probs.unsqueeze(-1).detach())
 
-        self.memory = deque(maxlen=4000)
+            surr1 = ratios * advantages.detach()
+            surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * advantages.detach()
+
+            policy_loss = -torch.min(surr1, surr2).mean()
+            value_loss = 0.5 * F.smooth_l1_loss(v, returns.detach())
+            entropy_loss = - self.entropy_coef * entropy
+
+            actor_loss = policy_loss + entropy_loss
+
+            self.actor_optimizer.zero_grad()
+            actor_loss.backward()
+            self.actor_optimizer.step()
+
+            self.critic_optimizer.zero_grad()
+            value_loss.backward()
+            self.critic_optimizer.step()

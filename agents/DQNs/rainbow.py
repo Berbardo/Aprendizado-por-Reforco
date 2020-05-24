@@ -47,7 +47,7 @@ class Network(nn.Module):
         q_atoms = value + advantage - advantage.mean(dim=1, keepdim=True)
         
         dist = F.softmax(q_atoms, dim=-1)
-        dist = dist.clamp(min=1e-3)  # for avoiding nans
+        dist = dist.clamp(min=1e-3)
         
         return dist
 
@@ -65,12 +65,12 @@ class Rainbow:
         self.gamma = gamma
         self.tau = tau
         self.beta = 0.6
-        self.n_step = n_step
         self.memory = PrioritizedReplayBuffer(10000, 0.5)
+        self.n_step = n_step
         self.action_space = action_space
 
-        self.v_min = -10
-        self.v_max = 10
+        self.v_min = 0.
+        self.v_max = 500.
         self.atom_size = 51
         self.support = torch.linspace(self.v_min, self.v_max, self.atom_size).to(self.device)
 
@@ -104,7 +104,7 @@ class Rainbow:
         (states, actions, rewards, next_states, dones, weights, batch_indexes) = self.memory.sample(batch_size, self.beta)
         weights = torch.FloatTensor(weights).unsqueeze(-1).to(self.device)
 
-        td_error = self.calculate_loss(states, actions, rewards, next_states, dones, self.gamma** self.n_step)
+        td_error = self.calculate_loss(states, actions, rewards, next_states, dones, self.gamma) # ** self.n_step)
 
         # gamma = self.gamma ** self.n_step
         # (states, actions, rewards, next_states, dones) = self.memory_n.sample_batch_from_idxs(batch_indexes)

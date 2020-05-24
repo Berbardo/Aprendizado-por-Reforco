@@ -22,6 +22,7 @@ class ActorCritic(nn.Module):
         probs = F.tanh(self.policy1(state))
         probs = F.tanh(self.policy2(probs))
         probs = F.softmax(self.policy3(probs), dim=-1)
+        probs = Categorical(probs)
         
         v = F.tanh(self.value1(state))
         v = F.tanh(self.value2(v))
@@ -30,32 +31,31 @@ class ActorCritic(nn.Module):
         return probs, v
 
 class SharedPPO:
-    def __init__(self, observation_space, action_space, lr=3e-4, gamma=0.99, lam=0.95, entropy_coef=0.05, clip=0.2):
+    def __init__(self, observation_space, action_space, lr=1e-3, steps=64, gamma=0.99, lam=0.95, entropy_coef=0.005, clip=0.2):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.gamma = gamma
         self.lam = lam
         self.entropy_coef = entropy_coef
         self.clip = clip
+        self.steps = steps
 
         self.memory = ExperienceReplay()
 
         self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
-        self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr, eps=1e-5)
-
-    def prob(self, state):
-        state = torch.FloatTensor(state).to(self.device)
-        dists, _ = self.actorcritic.forward(state)
-        probs = Categorical(dists)
-        return probs
+        self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr, eps=1e-6)
+        self.target_actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
+        self.target_actorcritic.load_state_dict(self.actorcritic.state_dict())
 
     def act(self, state):
-        probs = self.prob(state)
+        state = torch.FloatTensor(state).to(self.device)
+        probs, _ = self.target_actorcritic.forward(state)
         action = probs.sample()
         return action.cpu().detach().numpy()
 
     def remember(self, state, action, reward, new_state, done):
-        probs = self.prob(state)
+        state_torch = torch.FloatTensor(state).to(self.device)
+        probs, _ = self.actorcritic.forward(state_torch)
         action_torch = torch.LongTensor(action).to(self.device)
         log_probs = probs.log_prob(action_torch)
         self.memory.update(state, action, log_probs, reward, new_state, done)
@@ -75,11 +75,27 @@ class SharedPPO:
 
         return returns, (advantages - advantages.mean()) / (advantages.std() + 1e-10)
 
-    def train(self, batch_size=64, epochs=4):
-        if self.memory.length < batch_size:
+    def compute_loss(self, states, actions, logp, advantages, returns):
+        new_probs, v = self.actorcritic.forward(states)
+        
+        new_logprobs = new_probs.log_prob(actions)
+        entropy = new_probs.entropy().mean()
+        ratios = torch.exp(new_logprobs.unsqueeze(-1) - logp.unsqueeze(-1).detach())
+
+        surr1 = ratios * advantages.detach()
+        surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * advantages.detach()
+
+        policy_loss = -torch.min(surr1, surr2).mean()
+        value_loss = 0.5 * F.mse_loss(v, returns.detach())
+        entropy_loss = - self.entropy_coef * entropy
+
+        return policy_loss, value_loss, entropy_loss
+
+    def train(self, epochs=8):
+        if self.memory.length < self.steps:
             return
 
-        (states, actions, log_probs, rewards, next_states, dones) = self.memory.sample()
+        states, actions, log_probs, rewards, next_states, dones = self.memory.sample()
 
         states = torch.FloatTensor(states).to(self.device)
         actions = torch.FloatTensor(actions).to(self.device)
@@ -87,27 +103,17 @@ class SharedPPO:
         next_states = torch.FloatTensor(next_states).to(self.device)
         dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
         log_probs = torch.stack(log_probs).to(self.device).detach()
-
+    
         _, v = self.actorcritic.forward(states)
         returns, advantages = self.compute_gae(v, dones, rewards)
-        
+
         for _ in range(epochs):
-            dists, v = self.actorcritic.forward(states)
+            self.actorcritic_optimizer.zero_grad()
 
-            new_probs = Categorical(dists)
-            new_logprobs = new_probs.log_prob(actions)
-            entropy = new_probs.entropy().mean()
-            ratios = torch.exp(new_logprobs.unsqueeze(-1) - log_probs.unsqueeze(-1).detach())
-
-            surr1 = ratios * advantages.detach()
-            surr2 = torch.clamp(ratios, 1 - self.clip, 1 + self.clip) * advantages.detach()
-
-            policy_loss = -torch.min(surr1, surr2).mean()
-            value_loss = 0.5 * F.smooth_l1_loss(v, returns.detach())
-            entropy_loss = - self.entropy_coef * entropy
-
+            policy_loss, value_loss, entropy_loss = self.compute_loss(states, actions, log_probs, advantages, returns)            
             total_loss = policy_loss + value_loss + entropy_loss
 
-            self.actorcritic_optimizer.zero_grad()
             total_loss.backward()
             self.actorcritic_optimizer.step()
+
+        self.target_actorcritic.load_state_dict(self.actorcritic.state_dict())

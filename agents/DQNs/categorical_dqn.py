@@ -34,11 +34,12 @@ class Network(nn.Module):
     def dist(self, x: torch.Tensor) -> torch.Tensor:
         """Get distribution for atoms."""
         feature = self.feature_layer(x)
-        adv_hid = F.relu(self.advantage1(feature))
+
         val_hid = F.relu(self.value1(feature))
-        
-        advantage = self.advantage2(adv_hid).view(-1, self.out_dim, self.atom_dim)
         value = self.value2(val_hid).view(-1, 1, self.atom_dim)
+        
+        adv_hid = F.relu(self.advantage1(feature))
+        advantage = self.advantage2(adv_hid).view(-1, self.out_dim, self.atom_dim)
 
         q_atoms = value + advantage - advantage.mean(dim=1, keepdim=True)
         
@@ -53,10 +54,10 @@ class CategoricalDQN:
 
         self.gamma = gamma
         self.tau = tau
+        self.beta = 0.6
         self.memory = PrioritizedReplayBuffer(100000, 0.5)
         self.action_space = action_space
 
-        self.beta = 0.6
         self.epsilon = 0.7
         self.epsilon_decay = 0.995
         self.min_epsilon = 0.01
