@@ -58,7 +58,7 @@ class DQN:
         self.memory.update(state, action, reward, new_state, done)
 
     def train(self, batch_size=32, epochs=1):
-        if 100 > len(self.memory.memory):
+        if 100 > self.memory.size:
             return
         
         for epoch in range(epochs):

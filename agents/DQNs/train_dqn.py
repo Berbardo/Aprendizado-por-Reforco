@@ -12,7 +12,7 @@ from utils.dqn_runner import evaluate
 
 if __name__ == "__main__":
     env = gym.vector.make("CartPole-v1", num_envs=4, asynchronous=True)
-    agent = CategoricalDQN(env.single_observation_space, env.single_action_space)
+    agent = DDQN(env.single_observation_space, env.single_action_space)
 
     returns = vector_train(agent, env, 50000, 400)
 

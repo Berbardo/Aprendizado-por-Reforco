@@ -26,7 +26,7 @@ class DDQN:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = ExperienceReplay(10000)
+        self.memory = ExperienceReplay(25000)
         self.action_space = action_space
 
         self.epsilon = 0.7
@@ -59,7 +59,7 @@ class DDQN:
         self.memory.update(state, action, reward, new_state, done)
 
     def train(self, batch_size=32, epochs=1):
-        if 100 > len(self.memory.memory):
+        if 100 > self.memory.size:
             return
         
         for epoch in range(epochs):
