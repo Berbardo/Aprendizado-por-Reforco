@@ -3,12 +3,12 @@ import numpy as np
 
 class ExperienceReplay:
 
-    def __init__(self, length, device):
+    def __init__(self, length, observation_space, device):
         self.device = device
-        self.states = torch.ones([length, 4], dtype=torch.float32, device=self.device)
+        self.states = torch.ones([length, observation_space], dtype=torch.float32, device=self.device)
         self.actions = torch.ones([length], dtype=torch.int32, device=self.device)
         self.rewards = torch.ones([length], dtype=torch.float32, device=self.device)
-        self.next_states = torch.ones([length, 4], dtype=torch.float32, device=self.device)
+        self.next_states = torch.ones([length, observation_space], dtype=torch.float32, device=self.device)
         self.dones = torch.ones([length], dtype=torch.float32, device=self.device)
         self.reset(length)
 

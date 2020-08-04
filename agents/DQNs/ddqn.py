@@ -26,7 +26,7 @@ class DDQN:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = ExperienceReplay(25000)
+        self.memory = ExperienceReplay(1000000, observation_space.shape[0], self.device)
         self.action_space = action_space
 
         self.epsilon = 0.7
@@ -67,11 +67,9 @@ class DDQN:
 
             (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
 
-            states = torch.FloatTensor(states).to(self.device)
-            actions = torch.FloatTensor(actions).unsqueeze(-1).to(self.device)
-            rewards = torch.FloatTensor(rewards).unsqueeze(-1).to(self.device)
-            next_states = torch.FloatTensor(next_states).to(self.device)
-            dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
+            actions = actions.unsqueeze(-1)
+            rewards = rewards.unsqueeze(-1)
+            dones = dones.unsqueeze(-1)
 
             q = self.dqn.forward(states).gather(-1, actions.long())
             a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)

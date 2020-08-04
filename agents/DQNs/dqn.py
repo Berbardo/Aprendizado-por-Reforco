@@ -25,7 +25,7 @@ class DQN:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = ExperienceReplay(1000000, self.device)
+        self.memory = ExperienceReplay(1000000, observation_space.shape[0], self.device)
         self.action_space = action_space
 
         self.epsilon = 0.7
