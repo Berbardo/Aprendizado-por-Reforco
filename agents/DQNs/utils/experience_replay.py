@@ -1,35 +1,30 @@
+import torch
 import numpy as np
-from collections import deque
 
 class ExperienceReplay:
 
-    def __init__(self, length):
+    def __init__(self, length, device):
+        self.device = device
+        self.states = torch.ones([length, 4], dtype=torch.float32, device=self.device)
+        self.actions = torch.ones([length], dtype=torch.int32, device=self.device)
+        self.rewards = torch.ones([length], dtype=torch.float32, device=self.device)
+        self.next_states = torch.ones([length, 4], dtype=torch.float32, device=self.device)
+        self.dones = torch.ones([length], dtype=torch.float32, device=self.device)
         self.reset(length)
 
     def reset(self, length):
         self.size = 0
-        self.states = deque(maxlen=length)
-        self.actions = deque(maxlen=length)
-        self.rewards = deque(maxlen=length)
-        self.next_states = deque(maxlen=length)
-        self.dones = deque(maxlen=length)
 
     def update(self, states, actions, rewards, next_states, dones):
         for i in range(len(states)):
-            self.states.append(states[i])
-            self.actions.append(actions[i])
-            self.rewards.append(rewards[i])
-            self.next_states.append(next_states[i])
-            self.dones.append(dones[i])
-        self.size = len(self.states)
+            self.states[self.size + i] = torch.FloatTensor(states[i]).to(self.device)
+            self.actions[self.size + i] = actions[i]
+            self.rewards[self.size + i] = rewards[i]
+            self.next_states[self.size + i] = torch.FloatTensor(next_states[i]).to(self.device)
+            self.dones[self.size + i] = int(dones[i] == True)
+        self.size += len(states)
 
     def sample(self, batch_size):
         idxs = np.random.randint(0, self.size, size=batch_size)
 
-        states = np.array(self.states)
-        actions = np.array(self.actions)
-        rewards = np.array(self.rewards)
-        next_states = np.array(self.next_states)
-        dones = np.array(self.dones)
-
-        return (states[idxs], actions[idxs], rewards[idxs], next_states[idxs], dones[idxs])
+        return (self.states[idxs], self.actions[idxs], self.rewards[idxs], self.next_states[idxs], self.dones[idxs])
