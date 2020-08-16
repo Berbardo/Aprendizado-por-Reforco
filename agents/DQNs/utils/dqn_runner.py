@@ -90,7 +90,7 @@ def vector_train(agent, env, total_timesteps, break_condition):
 
         avg_return = avg_total_rewards[-1] if avg_total_rewards else np.nan
 
-        print(f"[{ratio:3d}% / {uptime:3d}s] timestep = {timestep}/{total_timesteps}, episode = {episode:3d}, avg_return = {avg_return:10.4f}\r", end="")
+        print(f"[{ratio:3d}% / {uptime:3d}s] timestep = {timestep}/{total_timesteps}, episode = {episode:3d}, avg_return = {avg_return:10.4f}, epsilon = {agent.epsilon:1.2f}\r", end="")
 
         if avg_return > break_condition:
             print("\n")

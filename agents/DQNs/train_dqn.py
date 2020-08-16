@@ -14,7 +14,7 @@ if __name__ == "__main__":
     env = gym.vector.make("CartPole-v1", num_envs=4, asynchronous=True)
     agent = DDQN(env.single_observation_space, env.single_action_space)
 
-    returns = vector_train(agent, env, 50000, 400)
+    returns = vector_train(agent, env, 50000, 450)
 
     eval_env = gym.make("CartPole-v1")
     evaluate(agent, eval_env, 1, True)

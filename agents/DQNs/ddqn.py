@@ -22,18 +22,18 @@ class Network(nn.Module):
         return self.layers(x)
 
 class DDQN:
-    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99):
+    def __init__(self, observation_space, action_space, lr=3e-4, gamma=0.99, tau=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = ExperienceReplay(1000000, observation_space.shape[0], self.device)
+        self.memory = ExperienceReplay(100000, observation_space.shape[0], self.device)
         self.action_space = action_space
 
-        self.epsilon = 0.7
-        self.epsilon_decay = 0.995
-        self.min_epsilon = 0.01
+        self.epsilon = 0.8
+        self.epsilon_decay = 0.999
+        self.min_epsilon = 0.02
 
-        self.update_count = 0
+        self.tau = tau
         self.dqn = Network(observation_space.shape[0], action_space.n).to(self.device)
         self.dqn_target = Network(observation_space.shape[0], action_space.n).to(self.device)
         self.dqn_target.load_state_dict(self.dqn.state_dict())
@@ -58,13 +58,11 @@ class DDQN:
     def remember(self, state, action, reward, new_state, done):
         self.memory.update(state, action, reward, new_state, done)
 
-    def train(self, batch_size=32, epochs=1):
+    def train(self, batch_size=64, epochs=1):
         if 100 > self.memory.size:
             return
         
         for epoch in range(epochs):
-            self.update_count +=1
-
             (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
 
             actions = actions.unsqueeze(-1)
@@ -83,8 +81,8 @@ class DDQN:
             loss.backward()
             self.optimizer.step()
 
-            if self.update_count % 200 == 0:
-                self.update_target()
+            self.update_target()
 
     def update_target(self):
-        self.dqn_target.load_state_dict(self.dqn.state_dict())
+        for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
+            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
