@@ -28,8 +28,8 @@ class DQN:
         self.memory = ExperienceReplay(1000000, observation_space.shape[0], self.device)
         self.action_space = action_space
 
-        self.epsilon = 0.7
-        self.epsilon_decay = 0.995
+        self.epsilon = 0.5
+        self.epsilon_decay = 0.9995
         self.min_epsilon = 0.01
 
         self.update_count = 0
@@ -55,9 +55,10 @@ class DQN:
         return action
 
     def remember(self, state, action, reward, new_state, done):
-        self.memory.update(state, action, reward, new_state, done)
+        for i in range(len(state)):
+            self.memory.update(state[i], action[i], reward[i], new_state[i], done[i])
 
-    def train(self, batch_size=32, epochs=1):
+    def train(self, batch_size=128, epochs=1):
         if 100 > self.memory.size:
             return
         

@@ -14,13 +14,12 @@ class ExperienceReplay:
         self.dones = torch.ones([max_length], dtype=torch.float32, device=self.device)
 
     def update(self, states, actions, rewards, next_states, dones):
-        for i in range(len(states)):
-            self.states[self.index + i] = torch.FloatTensor(states[i]).to(self.device)
-            self.actions[self.index + i] = actions[i]
-            self.rewards[self.index + i] = rewards[i]
-            self.next_states[self.index + i] = torch.FloatTensor(next_states[i]).to(self.device)
-            self.dones[self.index + i] = int(dones[i] == True)
-        self.index += len(states)
+        self.states[self.index] = torch.FloatTensor(states).to(self.device)
+        self.actions[self.index] = actions
+        self.rewards[self.index] = rewards
+        self.next_states[self.index] = torch.FloatTensor(next_states).to(self.device)
+        self.dones[self.index] = int(dones == True)
+        self.index += 1
         if self.size < self.max_length:
             self.size = self.index
         if self.index >= self.max_length:
