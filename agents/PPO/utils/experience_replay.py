@@ -35,6 +35,32 @@ class ExperienceReplay:
         self.reset()
         return states, actions, log_probs, rewards, next_states, dones
 
+class TorchReplay:
+    def __init__(self, max_length, env_num, observation_space, device):
+        self.device = device
+        self.length = 0
+        self.max_length = max_length
+        self.states = torch.ones([max_length, env_num, observation_space], dtype=torch.float32, device=self.device)
+        self.actions = torch.ones([max_length, env_num], dtype=torch.int32, device=self.device)
+        self.log_probs = torch.ones([max_length, env_num], dtype=torch.float32, device=self.device)
+        self.rewards = torch.ones([max_length, env_num], dtype=torch.float32, device=self.device)
+        self.next_states = torch.ones([max_length, env_num, observation_space], dtype=torch.float32, device=self.device)
+        self.dones = torch.ones([max_length, env_num], dtype=torch.float32, device=self.device)
+
+    def update(self, states, actions, log_probs, rewards, next_states, dones):
+        self.states[self.length] = torch.FloatTensor(states).to(self.device)
+        self.actions[self.length] = torch.IntTensor(actions).to(self.device)
+        self.log_probs[self.length] = log_probs
+        self.rewards[self.length] = torch.FloatTensor(rewards).to(self.device)
+        self.next_states[self.length] = torch.FloatTensor(next_states).to(self.device)
+        self.dones[self.length] = torch.FloatTensor(dones == True).to(self.device)
+        self.length += 1
+
+    def sample(self):
+        self.length = 0
+
+        return (self.states, self.actions, self.log_probs, self.rewards, self.next_states, self.dones)
+
 def combined_shape(length, shape=None):
     if shape is None:
         return (length,)

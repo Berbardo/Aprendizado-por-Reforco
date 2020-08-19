@@ -6,6 +6,7 @@ import torch.nn.functional as F
 from torch.distributions import Categorical
 
 from utils.experience_replay import ExperienceReplay
+from utils.experience_replay import TorchReplay
 
 class ActorCritic(nn.Module):
     def __init__(self, observation_shape, action_shape):
@@ -19,19 +20,19 @@ class ActorCritic(nn.Module):
         self.value3 = nn.Linear(64, 1)
 
     def forward(self, state):
-        probs = F.tanh(self.policy1(state))
-        probs = F.tanh(self.policy2(probs))
+        probs = torch.tanh(self.policy1(state))
+        probs = torch.tanh(self.policy2(probs))
         probs = F.softmax(self.policy3(probs), dim=-1)
         probs = Categorical(probs)
         
-        v = F.tanh(self.value1(state))
-        v = F.tanh(self.value2(v))
+        v = torch.tanh(self.value1(state))
+        v = torch.tanh(self.value2(v))
         v = self.value3(v)
 
         return probs, v
 
 class SharedPPO:
-    def __init__(self, observation_space, action_space, lr=1e-3, steps=64, gamma=0.99, lam=0.95, entropy_coef=0.005, clip=0.2):
+    def __init__(self, env_num, observation_space, action_space, lr=7e-4, steps=64, gamma=0.99, lam=0.95, entropy_coef=0.005, clip=0.1):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
         self.gamma = gamma
@@ -40,7 +41,7 @@ class SharedPPO:
         self.clip = clip
         self.steps = steps
 
-        self.memory = ExperienceReplay()
+        self.memory = TorchReplay(steps, env_num, observation_space.shape[0], self.device)
 
         self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
         self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr, eps=1e-6)
@@ -97,12 +98,9 @@ class SharedPPO:
 
         states, actions, log_probs, rewards, next_states, dones = self.memory.sample()
 
-        states = torch.FloatTensor(states).to(self.device)
-        actions = torch.FloatTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).unsqueeze(-1).to(self.device)
-        next_states = torch.FloatTensor(next_states).to(self.device)
-        dones = torch.FloatTensor(dones).unsqueeze(-1).to(self.device)
-        log_probs = torch.stack(log_probs).to(self.device).detach()
+        rewards = rewards.unsqueeze(-1)
+        dones = dones.unsqueeze(-1)
+        log_probs = log_probs.detach()
     
         _, v = self.actorcritic.forward(states)
         returns, advantages = self.compute_gae(v, dones, rewards)

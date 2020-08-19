@@ -118,8 +118,8 @@ def evaluate(agent, env, n_episodes=5, render=False):
 
             if render:
                 env.render()
-        
-        if render:
-            env.close()
 
         print(f">> episode = {episode} / {n_episodes}, total_reward = {total_reward:10.4f}, episode_length = {episode_length}")
+        
+    if render:
+        env.close()
