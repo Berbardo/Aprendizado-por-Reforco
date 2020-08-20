@@ -5,7 +5,8 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 from torch.distributions import Normal
-from collections import deque
+
+from utils.experience_replay import NumpyReplay
 
 class Actor(nn.Module):
     def __init__(self, observation_shape, action_shape, init_w=3e-3, log_std_min=-20, log_std_max=2):
@@ -78,7 +79,7 @@ class SAC:
         self.alpha = alpha
         self.gamma = gamma
         self.tau = tau
-        self.memory = deque(maxlen=1000000)
+        self.memory = NumpyReplay(1000000, observation_space.shape[0], self.device)
         self.count = 0
         self.policy_freq = policy_freq
 
@@ -116,28 +117,19 @@ class SAC:
 
     def remember(self, state, action, reward, new_state, done):
         for i in range(len(state)):
-            self.memory.append((state[i], action[i], reward[i], new_state[i], done[i]))
+            self.memory.update(state[i], action[i], reward[i], new_state[i], done[i])
 
     def train(self, batch_size=64):
-        if batch_size > len(self.memory):
+        if batch_size > self.memory.size:
             return
 
         self.count +=1
         
-        minibatch = random.sample(self.memory, batch_size)
-        states, actions, rewards, next_states, dones = [], [], [], [], []
-        for (s, a, r, s2, d) in minibatch:
-            states.append(s)
-            actions.append(a)
-            rewards.append([r])
-            next_states.append(s2)
-            dones.append([d])
+        (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
 
-        states = torch.FloatTensor(states).to(self.device)
-        actions = torch.FloatTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).to(self.device)
-        next_states = torch.FloatTensor(next_states).to(self.device)
-        dones = torch.FloatTensor(dones).to(self.device)
+        actions = actions.unsqueeze(-1)
+        rewards = rewards.unsqueeze(-1)
+        dones = dones.unsqueeze(-1)
 
         self._train_critics(states, actions, rewards, next_states, dones)
         if self.count % self.policy_freq == 0:
@@ -147,11 +139,11 @@ class SAC:
     def _train_critics(self, states, actions, rewards, next_states, dones):
         next_actions, next_log_pi = self.actor.sample(next_states)
 
-
-        target_Q1 = self.target_critic1.forward(next_states, next_actions)
-        target_Q2 = self.target_critic2.forward(next_states, next_actions)
-        target_Q = torch.min(target_Q1, target_Q2) - self.alpha * next_log_pi
-        target_Q = rewards + ((1-dones) * self.gamma * target_Q).detach()
+        with torch.no_grad():
+            target_Q1 = self.target_critic1.forward(next_states, next_actions)
+            target_Q2 = self.target_critic2.forward(next_states, next_actions)
+            target_Q = torch.min(target_Q1, target_Q2) - self.alpha * next_log_pi
+            target_Q = rewards + ((1-dones) * self.gamma * target_Q)
         
         current_Q1 = self.critic1(states, actions)
         loss_Q1 = F.mse_loss(current_Q1, target_Q)
@@ -182,9 +174,12 @@ class SAC:
         self.alpha_optim.step()
         self.alpha = self.log_alpha.exp()
 
-    def update_target(self):       
-        for target_param, param in zip(self.target_critic1.parameters(), self.critic1.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+    def update_target(self):
+        with torch.no_grad():
+            for target_param, param in zip(self.target_critic1.parameters(), self.critic1.parameters()):
+                target_param.data.mul_(1 - self.tau)
+                torch.add(target_param.data, param.data, alpha=self.tau, out=target_param.data)
 
-        for target_param, param in zip(self.target_critic2.parameters(), self.critic2.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+            for target_param, param in zip(self.target_critic2.parameters(), self.critic2.parameters()):
+                target_param.data.mul_(1 - self.tau)
+                torch.add(target_param.data, param.data, alpha=self.tau, out=target_param.data)
