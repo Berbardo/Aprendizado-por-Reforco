@@ -7,6 +7,7 @@ from torch.distributions import Categorical
 
 from utils.experience_replay import ExperienceReplay
 from utils.experience_replay import TorchReplay
+from utils.experience_replay import NumpyReplay
 
 class ActorCritic(nn.Module):
     def __init__(self, observation_shape, action_shape):
@@ -41,7 +42,7 @@ class SharedPPO:
         self.clip = clip
         self.steps = steps
 
-        self.memory = TorchReplay(steps, env_num, observation_space.shape[0], self.device)
+        self.memory = NumpyReplay(steps, env_num, observation_space.shape[0], self.device)
 
         self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
         self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr, eps=1e-6)

@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from utils.experience_replay import ExperienceReplay
+from utils.experience_replay import NumpyReplay
 
 class Network(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
@@ -26,7 +26,7 @@ class DDQN:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = ExperienceReplay(100000, observation_space.shape[0], self.device)
+        self.memory = NumpyReplay(100000, observation_space.shape[0], self.device)
         self.action_space = action_space
 
         self.epsilon = 0.5

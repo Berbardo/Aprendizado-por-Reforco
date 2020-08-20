@@ -35,6 +35,35 @@ class ExperienceReplay:
         self.reset()
         return states, actions, log_probs, rewards, next_states, dones
 
+class NumpyReplay:
+
+    def __init__(self, max_length, env_num, observation_space, device):
+        self.device = device
+        self.length = 0
+        self.max_length = max_length
+
+        self.states = np.zeros((max_length, env_num, observation_space), dtype=np.float32)
+        self.actions = np.zeros((max_length, env_num), dtype=np.int32)
+        self.log_probs = np.zeros((max_length, env_num), dtype=np.float32)
+        self.rewards = np.zeros((max_length, env_num), dtype=np.float32)
+        self.next_states = np.zeros((max_length, env_num, observation_space), dtype=np.float32)
+        self.dones = np.zeros((max_length, env_num), dtype=np.float32)
+
+    def update(self, states, actions, log_probs, rewards, next_states, dones):
+        self.states[self.length] = states
+        self.actions[self.length] = actions
+        self.log_probs[self.length] = log_probs.detach().cpu().numpy()
+        self.rewards[self.length] = rewards
+        self.next_states[self.length] = next_states
+        self.dones[self.length] = dones
+        self.length += 1
+
+    def sample(self):
+        self.length = 0
+
+        return (torch.as_tensor(self.states).to(self.device), torch.as_tensor(self.actions).to(self.device), torch.as_tensor(self.log_probs).to(self.device), 
+                torch.as_tensor(self.rewards).to(self.device), torch.as_tensor(self.next_states).to(self.device), torch.as_tensor(self.dones).to(self.device))
+
 class TorchReplay:
     def __init__(self, max_length, env_num, observation_space, device):
         self.device = device
