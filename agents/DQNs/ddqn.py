@@ -71,10 +71,12 @@ class DDQN:
             dones = dones.unsqueeze(-1)
 
             q = self.dqn.forward(states).gather(-1, actions.long())
-            a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)
-            q2 = self.dqn_target.forward(next_states).gather(-1, a2).detach()
 
-            target = (rewards + (1 - dones) * self.gamma * q2).to(self.device)
+            with torch.no_grad():
+                a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)
+                q2 = self.dqn_target.forward(next_states).gather(-1, a2)
+
+                target = (rewards + (1 - dones) * self.gamma * q2)
 
             loss = F.mse_loss(q, target)
 
@@ -85,5 +87,7 @@ class DDQN:
             self.update_target()
 
     def update_target(self):
-        for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+        with torch.no_grad():
+            for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
+                target_param.data.mul_(1 - self.tau)
+                torch.add(target_param.data, param.data, alpha=self.tau, out=target_param.data)

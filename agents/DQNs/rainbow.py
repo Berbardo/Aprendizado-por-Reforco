@@ -160,8 +160,10 @@ class Rainbow:
         return td_error
 
     def update_target(self):
-        for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
-            target_param.data.copy_(param.data * self.tau + target_param.data * (1.0 - self.tau))
+        with torch.no_grad():
+            for target_param, param in zip(self.dqn_target.parameters(), self.dqn.parameters()):
+                target_param.data.mul_(1 - self.tau)
+                torch.add(target_param.data, param.data, alpha=self.tau, out=target_param.data)
 
     def hard_update_target(self):
         self.dqn_target.load_state_dict(self.dqn.state_dict())
