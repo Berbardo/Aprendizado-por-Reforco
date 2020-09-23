@@ -26,54 +26,64 @@ class ActorCritic(nn.Module):
         return probs, v
 
 class SharedA2C:
-    def __init__(self, observation_space, action_space, lr=5e-4, gamma=0.99, lam=0.95, entropy_coef=0.001):
+    def __init__(self, observation_space, action_space, lr=3e-4, gamma=0.99, lam=0.95, entropy_coef=0.001, batch_size=32):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
         self.lam = lam
         self.entropy_coef = entropy_coef
 
-        self.memory = ExperienceReplay()
+        self.batch_size = batch_size
+        self.memory = ExperienceReplay(batch_size, observation_space.shape[0])
 
-        self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n).to(self.device)
+        self.actorcritic = ActorCritic(observation_space.shape[0], action_space.n)
         self.actorcritic_optimizer = optim.Adam(self.actorcritic.parameters(), lr=lr)
 
     def act(self, state):
-        state = torch.FloatTensor(state).to(self.device)
+        state = torch.FloatTensor(state).unsqueeze(0)
         dists, _ = self.actorcritic.forward(state)
         probs = Categorical(dists)
-        action = probs.sample().cpu().detach().numpy()
+        action = probs.sample().cpu().detach().numpy()[0]
         return action
 
     def remember(self, state, action, reward, new_state, done):
         self.memory.update(state, action, reward, new_state, done)
 
+    def compute_gae(self, rewards, dones, v, v2):
+        T = len(rewards)
+
+        returns = torch.zeros_like(rewards)
+        gaes = torch.zeros_like(rewards)
+        
+        future_gae = torch.tensor(0.0, dtype=rewards.dtype)
+        next_return = torch.tensor(v2[-1], dtype=rewards.dtype)
+
+        not_dones = 1 - dones
+        deltas = rewards + not_dones * self.gamma * v2 - v
+
+        for t in reversed(range(T)):
+            returns[t] = next_return = rewards[t] + self.gamma * not_dones[t] * next_return
+            gaes[t] = future_gae = deltas[t] + self.gamma * self.lam * not_dones[t] * future_gae
+
+        return gaes, returns
+
     def train(self):
-        if self.memory.length < 16:
+        if self.memory.length < self.batch_size:
             return
 
         (states, actions, rewards, next_states, dones) = self.memory.sample()
 
-        states = torch.FloatTensor(states).to(self.device)
-        actions = torch.FloatTensor(actions).to(self.device)
-        rewards = torch.FloatTensor(rewards).unsqueeze(2).to(self.device)
-        next_states = torch.FloatTensor(next_states).to(self.device)
-        dones = torch.FloatTensor(dones).unsqueeze(2).to(self.device)
+        states = torch.FloatTensor(states)
+        actions = torch.FloatTensor(actions)
+        rewards = torch.FloatTensor(rewards).unsqueeze(-1)
+        next_states = torch.FloatTensor(next_states)
+        dones = torch.FloatTensor(dones).unsqueeze(-1)
 
         dists, v = self.actorcritic.forward(states)
-        _, v2 = self.actorcritic.forward(next_states)
+        with torch.no_grad():
+            _, v2 = self.actorcritic.forward(next_states)
 
-        deltas = rewards + (1 - dones) * self.gamma * v2 - v
-
-        returns = torch.zeros_like(rewards).to(self.device)
-        advantages = torch.zeros_like(rewards).to(self.device)
-
-        returns[-1] = rewards[-1] + self.gamma * (1 - dones[-1]) * v2[-1]
-        advantages[-1] = deltas[-1]
-
-        for i in reversed(range(len(rewards) - 1)):
-            returns[i] = rewards[i] + self.gamma * (1 - dones[i]) * returns[i + 1]
-            advantages[i] = deltas[i] + self.gamma * self.lam * (1 - dones[i]) * advantages[i + 1]
+        advantages, returns = self.compute_gae(rewards, dones, v, v2)
 
         probs = Categorical(dists)
 
@@ -81,7 +91,7 @@ class SharedA2C:
 
         entropy = probs.entropy().mean()
 
-        policy_loss = (logp.unsqueeze(2) * advantages.detach()).mean()
+        policy_loss = (logp.unsqueeze(-1) * advantages.detach()).mean()
         value_loss = F.mse_loss(v, returns.detach())
         entropy_loss = - self.entropy_coef * entropy
 
