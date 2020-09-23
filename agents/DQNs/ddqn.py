@@ -4,7 +4,7 @@ import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
 
-from utils.experience_replay import NumpyReplay
+from utils.experience_replay import ReplayBuffer
 
 class Network(nn.Module):
     def __init__(self, in_dim: int, out_dim: int):
@@ -22,16 +22,17 @@ class Network(nn.Module):
         return self.layers(x)
 
 class DDQN:
-    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99, tau=0.01):
+    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99,
+                 epsilon=0.5, epsilon_decay=0.9995, min_epsilon=0.01, tau=0.005):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
-        self.memory = NumpyReplay(100000, observation_space.shape[0], self.device)
+        self.memory = ReplayBuffer(100000, observation_space.shape[0])
         self.action_space = action_space
 
-        self.epsilon = 0.5
-        self.epsilon_decay = 0.9995
-        self.min_epsilon = 0.02
+        self.epsilon = epsilon
+        self.epsilon_decay = epsilon_decay
+        self.min_epsilon = min_epsilon
 
         self.tau = tau
         self.dqn = Network(observation_space.shape[0], action_space.n).to(self.device)
@@ -46,29 +47,31 @@ class DDQN:
         self.epsilon = max(self.epsilon, self.min_epsilon)
 
         if np.random.random() < self.epsilon:
-            action = [self.action_space.sample() for i in range(len(state))]
+            action = self.action_space.sample()
             return action
 
-        state = torch.FloatTensor(state).to(self.device)
-        action = self.dqn.forward(state).argmax(dim=-1)
-        action = action.cpu().detach().numpy()
+        with torch.no_grad():
+            state = torch.FloatTensor(state).to(self.device)
+            action = self.dqn.forward(state).argmax(dim=-1)
+            action = action.cpu().numpy()
 
         return action
 
     def remember(self, state, action, reward, new_state, done):
-        for i in range(len(state)):
-            self.memory.update(state[i], action[i], reward[i], new_state[i], done[i])
+        self.memory.update(state, action, reward, new_state, done)
 
-    def train(self, batch_size=128, epochs=1):
+    def train(self, batch_size=32, epochs=1):
         if batch_size > self.memory.size:
             return
         
         for epoch in range(epochs):
             (states, actions, rewards, next_states, dones) = self.memory.sample(batch_size)
 
-            actions = actions.unsqueeze(-1)
-            rewards = rewards.unsqueeze(-1)
-            dones = dones.unsqueeze(-1)
+            states = torch.as_tensor(states).to(self.device)
+            actions = torch.as_tensor(actions).to(self.device).unsqueeze(-1)
+            rewards = torch.as_tensor(rewards).to(self.device).unsqueeze(-1)
+            next_states = torch.as_tensor(next_states).to(self.device)
+            dones = torch.as_tensor(dones).to(self.device).unsqueeze(-1)
 
             q = self.dqn.forward(states).gather(-1, actions.long())
 

@@ -1,33 +1,27 @@
-from collections import deque
+import numpy as np
 
 class ExperienceReplay:
 
-    def __init__(self):
-        self.reset()
-
-    def reset(self):
-        self.memory = deque(maxlen=1000)
+    def __init__(self, max_length, observation_space):
         self.length = 0
+        self.max_length = max_length
+
+        self.states = np.zeros((max_length, observation_space), dtype=np.float32)
+        self.actions = np.zeros((max_length), dtype=np.int32)
+        self.rewards = np.zeros((max_length), dtype=np.float32)
+        self.next_states = np.zeros((max_length, observation_space), dtype=np.float32)
+        self.dones = np.zeros((max_length), dtype=np.float32)
 
     def update(self, states, actions, rewards, next_states, dones):
-        experience = (states, actions, rewards, next_states, dones)
+        self.states[self.length] = states
+        self.actions[self.length] = actions
+        self.rewards[self.length] = rewards
+        self.next_states[self.length] = next_states
+        self.dones[self.length] = dones
         self.length += 1
-        self.memory.append(experience)
 
     def sample(self):
-        states = []
-        actions = []
-        rewards = []
-        next_states = []
-        dones = []
+        self.length = 0
 
-        for experience in self.memory:
-            state, action, reward, next_state, done = experience
-            states.append(state)
-            actions.append(action)
-            rewards.append(reward)
-            next_states.append(next_state)
-            dones.append(done)
+        return (self.states, self.actions, self.rewards, self.next_states, self.dones)
 
-        self.reset()
-        return (states, actions, rewards, next_states, dones)

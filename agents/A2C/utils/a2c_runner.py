@@ -2,9 +2,11 @@ import time
 import math
 import numpy as np
 
+from collections import deque
+
 def train(agent, env, total_timesteps, break_condition):
     total_reward = 0
-    episode_returns = []
+    episode_returns = deque(maxlen=20)
     avg_total_rewards = []
 
     observation = env.reset()
@@ -26,9 +28,9 @@ def train(agent, env, total_timesteps, break_condition):
         if done:
             episode_returns.append(total_reward)
             episode += 1
+            next_observation = env.reset()
 
-        if any(G for G in episode_returns):
-            avg_total_rewards.append(np.mean([G[-1] for G in episode_returns[-20:]]))
+        avg_total_rewards.append(np.mean(episode_returns))
 
         total_reward *= 1 - done
         observation = next_observation
@@ -36,7 +38,7 @@ def train(agent, env, total_timesteps, break_condition):
         ratio = math.ceil(100 * timestep / total_timesteps)
         uptime = math.ceil(time.time() - start_time)
 
-        avg_return = avg_total_rewards[-1] if avg_total_rewards else np.nan
+        avg_return = avg_total_rewards[-1]
 
         print(f"[{ratio:3d}% / {uptime:3d}s] timestep = {timestep}/{total_timesteps}, episode = {episode:3d}, avg_return = {avg_return:10.4f}\r", end="")
 
@@ -109,7 +111,7 @@ def evaluate(agent, env, n_episodes=5, render=False):
 
         done = False
         while not done:
-            action = agent.act(obs[None,:])[0]
+            action = agent.act(obs)
             next_obs, reward, done, _ = env.step(action)
             obs = next_obs
             
