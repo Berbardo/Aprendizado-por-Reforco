@@ -40,18 +40,18 @@ class Network(nn.Module):
         return qvals
 
 class DuelingDDQN:
-    def __init__(self, observation_space, action_space, lr=1e-3, gamma=0.99, tau=0.01):
+    def __init__(self, observation_space, action_space, lr=7e-4, gamma=0.99, tau=0.01):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         self.gamma = gamma
         self.tau = tau
-        self.memory = PrioritizedReplayBuffer(100000, 0.6)
+        self.memory = PrioritizedReplayBuffer(100000, observation_space.shape[0], 0.6)
         self.action_space = action_space
 
         self.beta = 0.6
-        self.epsilon = 0.7
-        self.epsilon_decay = 0.995
-        self.min_epsilon = 0.01
+        self.epsilon = 0.5
+        self.epsilon_decay = 0.9995
+        self.min_epsilon = 0.02
 
         self.update_count = 0
         self.dqn = Network(observation_space.shape[0], action_space.n).to(self.device)
@@ -66,21 +66,21 @@ class DuelingDDQN:
         self.epsilon = max(self.epsilon, self.min_epsilon)
 
         if np.random.random() < self.epsilon:
-            action = [self.action_space.sample() for i in range(len(state))]
+            action = self.action_space.sample()
             return action
 
-        state = torch.FloatTensor(state).to(self.device)
-        action = self.dqn.forward(state).argmax(dim=-1)
-        action = action.cpu().detach().numpy()
+        with torch.no_grad():
+            state = torch.FloatTensor(state).to(self.device)
+            action = self.dqn.forward(state).argmax(dim=-1)
+            action = action.cpu().numpy()
 
         return action
 
     def remember(self, states, actions, rewards, new_states, dones):
-        for i in range(len(states)):
-            self.memory.add(states[i], actions[i], rewards[i], new_states[i], dones[i])
+        self.memory.update(states, actions, rewards, new_states, dones)
 
     def train(self, batch_size=32, epochs=1):
-        if 1000 > len(self.memory._storage):
+        if batch_size > self.memory.size:
             return
         
         for epoch in range(epochs):
