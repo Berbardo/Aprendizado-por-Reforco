@@ -48,7 +48,7 @@ class DuelingDDQN:
         self.memory = PrioritizedReplayBuffer(100000, observation_space.shape[0], 0.6)
         self.action_space = action_space
 
-        self.beta = 0.6
+        self.beta = 0.4
         self.epsilon = 0.5
         self.epsilon_decay = 0.9995
         self.min_epsilon = 0.02
@@ -99,10 +99,12 @@ class DuelingDDQN:
 
 
             q = self.dqn.forward(states).gather(-1, actions.long())
-            a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)
-            q2 = self.dqn_target.forward(next_states).gather(-1, a2).detach()
 
-            target = (rewards + (1 - dones) * self.gamma * q2).to(self.device)
+            with torch.no_grad():
+                a2 = self.dqn.forward(next_states).argmax(dim=-1, keepdim=True)
+                q2 = self.dqn_target.forward(next_states).gather(-1, a2)
+
+                target = (rewards + (1 - dones) * self.gamma * q2).to(self.device)
 
             td_error = F.mse_loss(q, target, reduction="none")
             loss = torch.mean(td_error * weights)
