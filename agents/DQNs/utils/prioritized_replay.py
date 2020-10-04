@@ -74,7 +74,7 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         """See ReplayBuffer.store_effect"""
         idx = self.index
         super().update(*args, **kwargs)
-        self.tree.add(self._max_priority ** self.alpha, self.index)
+        self.tree.add(self._max_priority, self.index)
 
     def sample(self, batch_size, beta):
         assert beta > 0
@@ -83,8 +83,11 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         batch_idxs = np.zeros(batch_size)
         tree_idxs = np.zeros(batch_size, dtype=np.int)
 
+        priority_segment = self.tree.total() / batch_size
+
         for i in range(batch_size):
-            s = random.uniform(0, self.tree.total())
+            a, b = priority_segment * i, priority_segment * (i + 1)
+            s = random.uniform(a, b)
             (tree_idx, p, idx) = self.tree.get(s)
 
             priorities[i] = p
@@ -100,7 +103,8 @@ class PrioritizedReplayBuffer(ReplayBuffer):
         return (self.states[batch_idxs], self.actions[batch_idxs], self.rewards[batch_idxs], self.next_states[batch_idxs], self.dones[batch_idxs], weights, tree_idxs)
 
     def update_priorities(self, tree_idxs, errors):
-        priorities = np.power(errors, self.alpha).squeeze()
+        priorities = np.power(errors + 1e-8, self.alpha).squeeze()
         assert len(priorities) == tree_idxs.size
+        self._max_priority = max(self._max_priority, np.max(priorities))
         for p, i in zip(priorities, tree_idxs):
             self.tree.update(i, p)

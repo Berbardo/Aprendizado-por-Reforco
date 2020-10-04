@@ -115,7 +115,7 @@ class DuelingDDQN:
 
             self.update_target()
 
-            priorities = td_error.detach().cpu().numpy() + 1e-6
+            priorities = td_error.detach().cpu().numpy()
             self.memory.update_priorities(batch_indexes, priorities)
 
 
